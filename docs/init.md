@@ -563,7 +563,7 @@ type FromWebviewMessage =
 - `vibechannel.refresh`: Force refresh the chat view
 
 **Context menu:**
-- Right-click on folder with schema.md → "Open as Chat"
+- Right-click on folder with schema.md → "Open folder as VibeChannel"
 
 #### 4.2 Status Bar Item
 **File:** Part of `src/extension.ts`

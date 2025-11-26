@@ -25,7 +25,7 @@
     "commands": [
       {
         "command": "vibechannel.openFolder",
-        "title": "Open Folder as Chat",
+        "title": "Open Folder as VibeChannel",
         "category": "VibeChannel"
       },
       {

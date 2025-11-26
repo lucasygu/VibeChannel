@@ -23,7 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
           canSelectFiles: false,
           canSelectFolders: true,
           canSelectMany: false,
-          openLabel: 'Open as Chat',
+          openLabel: 'Open folder as VibeChannel',
           title: 'Select a VibeChannel folder',
         });
 
