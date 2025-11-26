@@ -4,6 +4,7 @@
   "description": "Render a folder of markdown files as a chat conversation",
   "version": "0.1.0",
   "publisher": "vibechannel",
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -36,6 +37,21 @@
       {
         "command": "vibechannel.refresh",
         "title": "Refresh Chat View",
+        "category": "VibeChannel"
+      },
+      {
+        "command": "vibechannel.signIn",
+        "title": "Sign In with GitHub",
+        "category": "VibeChannel"
+      },
+      {
+        "command": "vibechannel.signOut",
+        "title": "Sign Out from GitHub",
+        "category": "VibeChannel"
+      },
+      {
+        "command": "vibechannel.showAccount",
+        "title": "Show GitHub Account",
         "category": "VibeChannel"
       }
     ],

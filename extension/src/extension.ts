@@ -2,11 +2,18 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { ChatPanel } from './chatPanel';
 import { isVibeChannelFolder } from './schemaParser';
+import { GitHubAuthService, GitHubUser } from './githubAuth';
 
 let statusBarItem: vscode.StatusBarItem | undefined;
+let accountStatusBarItem: vscode.StatusBarItem | undefined;
+let authService: GitHubAuthService | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log('VibeChannel extension activated');
+
+  // Initialize auth service
+  authService = GitHubAuthService.getInstance();
+  context.subscriptions.push(authService);
 
   // Register commands
   const openFolderCommand = vscode.commands.registerCommand(
@@ -115,9 +122,70 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
-  context.subscriptions.push(openFolderCommand, openCurrentCommand, refreshCommand);
+  // GitHub auth commands
+  const signInCommand = vscode.commands.registerCommand(
+    'vibechannel.signIn',
+    async () => {
+      const user = await authService?.signIn();
+      if (user) {
+        vscode.window.showInformationMessage(
+          `Signed in as ${user.name || user.login}`
+        );
+        // Refresh chat panel to show updated auth state
+        ChatPanel.refresh();
+      }
+    }
+  );
 
-  // Create status bar item
+  const signOutCommand = vscode.commands.registerCommand(
+    'vibechannel.signOut',
+    async () => {
+      await authService?.signOut();
+      ChatPanel.refresh();
+    }
+  );
+
+  const showAccountCommand = vscode.commands.registerCommand(
+    'vibechannel.showAccount',
+    async () => {
+      const user = authService?.getUser();
+
+      if (user) {
+        const action = await vscode.window.showInformationMessage(
+          `Signed in as ${user.name || user.login} (@${user.login})`,
+          'Sign Out',
+          'OK'
+        );
+
+        if (action === 'Sign Out') {
+          await authService?.signOut();
+          ChatPanel.refresh();
+        }
+      } else {
+        const action = await vscode.window.showInformationMessage(
+          'Not signed in to GitHub',
+          'Sign In',
+          'Cancel'
+        );
+
+        if (action === 'Sign In') {
+          await authService?.signIn();
+          ChatPanel.refresh();
+        }
+      }
+    }
+  );
+
+  context.subscriptions.push(
+    openFolderCommand,
+    openCurrentCommand,
+    refreshCommand,
+    signInCommand,
+    signOutCommand,
+    showAccountCommand
+  );
+
+  // Create status bar item for VibeChannel
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
@@ -125,6 +193,21 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem.command = 'vibechannel.openCurrent';
   statusBarItem.tooltip = 'Open VibeChannel Chat';
   context.subscriptions.push(statusBarItem);
+
+  // Create account status bar item
+  accountStatusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    50
+  );
+  accountStatusBarItem.command = 'vibechannel.showAccount';
+  context.subscriptions.push(accountStatusBarItem);
+
+  // Listen for auth state changes
+  context.subscriptions.push(
+    authService.onAuthStateChange((user) => {
+      updateAccountStatusBar(user);
+    })
+  );
 
   // Update status bar based on current workspace
   updateStatusBar();
@@ -187,6 +270,22 @@ function updateStatusBar(): void {
     statusBarItem.show();
   } else {
     statusBarItem.hide();
+  }
+}
+
+function updateAccountStatusBar(user: GitHubUser | null): void {
+  if (!accountStatusBarItem) {
+    return;
+  }
+
+  if (user) {
+    accountStatusBarItem.text = `$(github) ${user.login}`;
+    accountStatusBarItem.tooltip = `Signed in as ${user.name || user.login}`;
+    accountStatusBarItem.show();
+  } else {
+    accountStatusBarItem.text = '$(github) Sign In';
+    accountStatusBarItem.tooltip = 'Sign in with GitHub';
+    accountStatusBarItem.show();
   }
 }
 
