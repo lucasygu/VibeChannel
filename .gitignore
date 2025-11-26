@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+
+# VSCode extension artifacts
+*.vsix
+.vscode-test/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local

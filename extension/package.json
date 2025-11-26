@@ -1,0 +1,92 @@
+{
+  "name": "vibechannel",
+  "displayName": "VibeChannel",
+  "description": "Render a folder of markdown files as a chat conversation",
+  "version": "0.1.0",
+  "publisher": "vibechannel",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "chat",
+    "markdown",
+    "conversation",
+    "decentralized"
+  ],
+  "activationEvents": [
+    "workspaceContains:schema.md"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vibechannel.openFolder",
+        "title": "Open Folder as Chat",
+        "category": "VibeChannel"
+      },
+      {
+        "command": "vibechannel.openCurrent",
+        "title": "Open Current Folder as Chat",
+        "category": "VibeChannel"
+      },
+      {
+        "command": "vibechannel.refresh",
+        "title": "Refresh Chat View",
+        "category": "VibeChannel"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "vibechannel.openFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VibeChannel",
+      "properties": {
+        "vibechannel.timestampDisplay": {
+          "type": "string",
+          "default": "relative",
+          "enum": ["relative", "absolute"],
+          "description": "How to display message timestamps"
+        },
+        "vibechannel.watchForChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh when files change"
+        },
+        "vibechannel.autoOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open chat panel when opening a VibeChannel folder"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3",
+    "marked": "^11.0.0"
+  }
+}
