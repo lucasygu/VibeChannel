@@ -7,28 +7,30 @@ import { FolderWatcher, WatcherEvent } from './folderWatcher';
 import { Message } from './messageParser';
 import { marked } from 'marked';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
+import { getChannels, createChannel } from './channelManager';
 
 /**
- * Manages the chat webview panel
+ * Manages the chat webview panel with Slack-like sidebar
  */
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
   private static readonly viewType = 'vibechannelChat';
 
   private readonly panel: vscode.WebviewPanel;
-  private readonly folderPath: string;
-  private readonly channelName: string | null;
+  private readonly vibechannelPath: string;
+  private channels: string[];
+  private currentChannel: string;
   private conversation: Conversation;
   private watcher: FolderWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
 
-  public static createOrShow(folderPath: string): void {
+  public static createOrShow(vibechannelPath: string): void {
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
 
-    // If we already have a panel for this folder, show it
-    if (ChatPanel.currentPanel && ChatPanel.currentPanel.folderPath === folderPath) {
+    // If we already have a panel for this .vibechannel folder, show it
+    if (ChatPanel.currentPanel && ChatPanel.currentPanel.vibechannelPath === vibechannelPath) {
       ChatPanel.currentPanel.panel.reveal(column);
       return;
     }
@@ -38,30 +40,29 @@ export class ChatPanel {
       ChatPanel.currentPanel.dispose();
     }
 
-    const conversation = loadConversation(folderPath);
+    // Get workspace path from .vibechannel path
+    const workspacePath = path.dirname(vibechannelPath);
 
-    // Extract channel name if this is a channel folder inside .vibechannel
-    const parentDir = path.dirname(folderPath);
-    const parentName = path.basename(parentDir);
-    const channelName = parentName === '.vibechannel' ? path.basename(folderPath) : null;
+    // Get list of channels
+    const channels = getChannels(workspacePath);
+    const defaultChannel = channels.includes('general') ? 'general' : channels[0] || 'general';
 
-    // Set panel title to channel name or schema name
-    const panelTitle = channelName
-      ? `#${channelName}`
-      : conversation.schema.metadata.name || 'VibeChannel';
+    // Load conversation for the default channel
+    const channelPath = path.join(vibechannelPath, defaultChannel);
+    const conversation = loadConversation(channelPath);
 
     const panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
-      panelTitle,
+      'VibeChannel',
       column || vscode.ViewColumn.One,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.file(folderPath)],
+        localResourceRoots: [vscode.Uri.file(vibechannelPath)],
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, folderPath, conversation, channelName);
+    ChatPanel.currentPanel = new ChatPanel(panel, vibechannelPath, channels, defaultChannel, conversation);
   }
 
   public static refresh(): void {
@@ -72,13 +73,15 @@ export class ChatPanel {
 
   private constructor(
     panel: vscode.WebviewPanel,
-    folderPath: string,
-    conversation: Conversation,
-    channelName: string | null
+    vibechannelPath: string,
+    channels: string[],
+    currentChannel: string,
+    conversation: Conversation
   ) {
     this.panel = panel;
-    this.folderPath = folderPath;
-    this.channelName = channelName;
+    this.vibechannelPath = vibechannelPath;
+    this.channels = channels;
+    this.currentChannel = currentChannel;
     this.conversation = conversation;
 
     // Set initial content
@@ -112,9 +115,14 @@ export class ChatPanel {
     );
   }
 
+  private getCurrentChannelPath(): string {
+    return path.join(this.vibechannelPath, this.currentChannel);
+  }
+
   private startWatcher(): void {
+    this.watcher?.dispose();
     this.watcher = new FolderWatcher(
-      this.folderPath,
+      this.getCurrentChannelPath(),
       (event: WatcherEvent, filepath: string) => {
         this.handleFileChange(event, filepath);
       }
@@ -143,9 +151,17 @@ export class ChatPanel {
       case 'requestRefresh':
         this.refresh();
         break;
+      case 'switchChannel':
+        if (typeof message.payload === 'string') {
+          this.switchChannel(message.payload);
+        }
+        break;
+      case 'createChannel':
+        this.promptCreateChannel();
+        break;
       case 'openFile':
         if (typeof message.payload === 'string') {
-          const filepath = path.join(this.folderPath, message.payload);
+          const filepath = path.join(this.getCurrentChannelPath(), message.payload);
           vscode.workspace.openTextDocument(filepath).then((doc) => {
             vscode.window.showTextDocument(doc);
           });
@@ -162,6 +178,51 @@ export class ChatPanel {
           this.createMessageFile(message.payload.trim());
         }
         break;
+    }
+  }
+
+  private switchChannel(channelName: string): void {
+    if (channelName === this.currentChannel) {
+      return;
+    }
+
+    this.currentChannel = channelName;
+    const channelPath = this.getCurrentChannelPath();
+    this.conversation = loadConversation(channelPath);
+
+    // Restart watcher for new channel
+    const config = vscode.workspace.getConfiguration('vibechannel');
+    if (config.get('watchForChanges', true)) {
+      this.startWatcher();
+    }
+
+    this.update();
+  }
+
+  private async promptCreateChannel(): Promise<void> {
+    const channelName = await vscode.window.showInputBox({
+      prompt: 'Enter channel name',
+      placeHolder: 'e.g., random, dev-chat, project-ideas',
+      validateInput: (value) => {
+        if (!value) {
+          return 'Channel name is required';
+        }
+        if (!/^[a-z0-9-]+$/.test(value)) {
+          return 'Channel name can only contain lowercase letters, numbers, and hyphens';
+        }
+        if (this.channels.includes(value)) {
+          return 'Channel already exists';
+        }
+        return null;
+      },
+    });
+
+    if (channelName) {
+      const workspacePath = path.dirname(this.vibechannelPath);
+      createChannel(workspacePath, channelName);
+      this.channels = getChannels(workspacePath);
+      this.switchChannel(channelName);
+      vscode.window.showInformationMessage(`Created #${channelName} channel`);
     }
   }
 
@@ -193,7 +254,7 @@ export class ChatPanel {
 
       // Construct filename
       const filename = `${fileTimestamp}-${sender}-${randomId}.md`;
-      const filepath = path.join(this.folderPath, filename);
+      const filepath = path.join(this.getCurrentChannelPath(), filename);
 
       // Create file content
       const fileContent = `---
@@ -214,7 +275,12 @@ ${content}
   }
 
   public refresh(): void {
-    this.conversation = loadConversation(this.folderPath);
+    // Refresh channels list
+    const workspacePath = path.dirname(this.vibechannelPath);
+    this.channels = getChannels(workspacePath);
+
+    // Refresh conversation
+    this.conversation = loadConversation(this.getCurrentChannelPath());
     this.update();
   }
 
@@ -228,56 +294,55 @@ ${content}
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
 
-    // Use channel name if available, otherwise fall back to schema name
-    const headerTitle = this.channelName
-      ? `#${this.channelName}`
-      : this.conversation.schema.metadata.name || 'Conversation';
-    const pageTitle = this.channelName
-      ? `#${this.channelName} - VibeChannel`
-      : this.conversation.schema.metadata.name || 'VibeChannel';
-
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https:;">
-  <title>${this.escapeHtml(pageTitle)}</title>
+  <title>VibeChannel</title>
   <style>
     ${this.getStyles()}
   </style>
 </head>
 <body>
-  <div class="chat-wrapper">
-    <div class="chat-container">
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>VibeChannel</h2>
+        <div class="auth-section">
+          ${user ? this.renderSidebarUserInfo(user) : this.renderSidebarSignIn()}
+        </div>
+      </div>
+      <div class="channels-section">
+        <div class="channels-header">
+          <span>Channels</span>
+          <button class="add-channel-btn" id="addChannelBtn" title="Create new channel">+</button>
+        </div>
+        <ul class="channel-list">
+          ${this.renderChannelList()}
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
       <header class="chat-header">
-        <div class="header-top">
-          <h1>${this.escapeHtml(headerTitle)}</h1>
-          <div class="auth-section">
-            ${user ? this.renderUserInfo(user) : this.renderSignInButton()}
-          </div>
-        </div>
-        ${this.conversation.schema.metadata.description
-          ? `<p class="description">${this.escapeHtml(this.conversation.schema.metadata.description)}</p>`
-          : ''}
-        <div class="header-info">
-          <span class="message-count">${this.conversation.messages.length} messages</span>
-          ${this.conversation.errors.length > 0
-            ? `<span class="error-count">${this.conversation.errors.length} errors</span>`
-            : ''}
-        </div>
+        <h1>#${this.escapeHtml(this.currentChannel)}</h1>
+        <span class="message-count">${this.conversation.messages.length} messages</span>
       </header>
 
-      <div class="messages" id="messagesContainer">
+      <div class="messages-container" id="messagesContainer">
         ${this.renderMessages(timestampDisplay === 'relative')}
       </div>
 
       ${this.conversation.errors.length > 0 ? this.renderErrors() : ''}
-    </div>
 
-    <div class="input-area">
-      ${user ? this.renderInputField(user) : this.renderInputDisabled()}
-    </div>
+      <div class="input-area">
+        ${user ? this.renderInputField(user) : this.renderInputDisabled()}
+      </div>
+    </main>
   </div>
 
   <script>
@@ -287,11 +352,34 @@ ${content}
 </html>`;
   }
 
+  private renderChannelList(): string {
+    return this.channels
+      .map((channel) => {
+        const isActive = channel === this.currentChannel;
+        return `<li class="channel-item ${isActive ? 'active' : ''}" data-channel="${this.escapeHtml(channel)}">
+          <span class="channel-hash">#</span>
+          <span class="channel-name">${this.escapeHtml(channel)}</span>
+        </li>`;
+      })
+      .join('');
+  }
+
+  private renderSidebarUserInfo(user: GitHubUser): string {
+    return `<div class="sidebar-user">
+      <img class="sidebar-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
+      <span class="sidebar-username">${this.escapeHtml(user.login)}</span>
+    </div>`;
+  }
+
+  private renderSidebarSignIn(): string {
+    return `<button class="sidebar-sign-in" id="sidebarSignInBtn">Sign in</button>`;
+  }
+
   private renderMessages(relativeTime: boolean): string {
     if (this.conversation.messages.length === 0) {
       return `<div class="empty-state">
-        <p>No messages yet</p>
-        <p class="hint">Add markdown files to this folder to start a conversation</p>
+        <p>No messages in #${this.escapeHtml(this.currentChannel)}</p>
+        <p class="hint">Be the first to send a message!</p>
       </div>`;
     }
 
@@ -361,30 +449,13 @@ ${content}
     </div>`;
   }
 
-  private renderUserInfo(user: GitHubUser): string {
-    return `<div class="user-info">
-      <img class="user-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
-      <span class="user-name">${this.escapeHtml(user.name || user.login)}</span>
-      <button class="sign-out-btn" id="signOutBtn">Sign Out</button>
-    </div>`;
-  }
-
-  private renderSignInButton(): string {
-    return `<button class="sign-in-btn" id="signInBtn">
-      <svg class="github-icon" viewBox="0 0 16 16" width="16" height="16">
-        <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-      </svg>
-      Sign in with GitHub
-    </button>`;
-  }
-
   private renderInputField(user: GitHubUser): string {
     return `<div class="input-container">
       <img class="input-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
       <textarea
         id="messageInput"
         class="message-input"
-        placeholder="Type a message..."
+        placeholder="Message #${this.escapeHtml(this.currentChannel)}"
         rows="1"
       ></textarea>
       <button class="send-btn" id="sendBtn" title="Send message (Cmd+Enter)">
@@ -397,15 +468,8 @@ ${content}
 
   private renderInputDisabled(): string {
     return `<div class="input-disabled">
-      <div class="input-disabled-content">
-        <span class="input-disabled-text">Sign in to join the conversation</span>
-        <button class="sign-in-btn-small" id="signInBtnInput">
-          <svg class="github-icon" viewBox="0 0 16 16" width="14" height="14">
-            <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-          </svg>
-          Sign in with GitHub
-        </button>
-      </div>
+      <span class="input-disabled-text">Sign in to send messages</span>
+      <button class="sign-in-btn-small" id="signInBtnInput">Sign in with GitHub</button>
     </div>`;
   }
 
@@ -418,7 +482,6 @@ ${content}
   }
 
   private getSenderColorClass(sender: string): string {
-    // Generate a consistent color class based on sender name
     let hash = 0;
     for (let i = 0; i < sender.length; i++) {
       hash = ((hash << 5) - hash) + sender.charCodeAt(i);
@@ -504,39 +567,30 @@ ${content}
         line-height: 1.5;
       }
 
-      .chat-wrapper {
+      .app-container {
         display: flex;
-        flex-direction: column;
         height: 100vh;
       }
 
-      .chat-container {
-        flex: 1;
-        overflow-y: auto;
-        max-width: 800px;
-        width: 100%;
-        margin: 0 auto;
-        padding: 20px;
-        padding-bottom: 0;
+      /* Sidebar Styles */
+      .sidebar {
+        width: 220px;
+        background-color: var(--vscode-sideBar-background, #252526);
+        border-right: 1px solid var(--vscode-panel-border, #454545);
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
       }
 
-      .chat-header {
-        margin-bottom: 24px;
-        padding-bottom: 16px;
+      .sidebar-header {
+        padding: 16px;
         border-bottom: 1px solid var(--vscode-panel-border, #454545);
       }
 
-      .header-top {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 8px;
-      }
-
-      .chat-header h1 {
-        font-size: 1.5em;
+      .sidebar-header h2 {
+        font-size: 1.1em;
         font-weight: 600;
-        margin: 0;
+        margin-bottom: 12px;
       }
 
       .auth-section {
@@ -544,77 +598,137 @@ ${content}
         align-items: center;
       }
 
-      .user-info {
+      .sidebar-user {
         display: flex;
         align-items: center;
         gap: 8px;
       }
 
-      .user-avatar {
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
+      .sidebar-avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
       }
 
-      .user-name {
-        font-size: 0.9em;
+      .sidebar-username {
+        font-size: 0.85em;
         color: var(--vscode-foreground, #cccccc);
       }
 
-      .sign-in-btn, .sign-out-btn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
+      .sidebar-sign-in {
+        padding: 4px 8px;
+        font-size: 0.8em;
+        background-color: var(--vscode-button-background, #0e639c);
+        color: var(--vscode-button-foreground, #ffffff);
         border: none;
         border-radius: 4px;
         cursor: pointer;
-        font-size: 0.85em;
-        font-family: inherit;
       }
 
-      .sign-in-btn {
-        background-color: var(--vscode-button-background, #0e639c);
-        color: var(--vscode-button-foreground, #ffffff);
-      }
-
-      .sign-in-btn:hover {
+      .sidebar-sign-in:hover {
         background-color: var(--vscode-button-hoverBackground, #1177bb);
       }
 
-      .sign-out-btn {
-        background-color: transparent;
-        color: var(--vscode-descriptionForeground, #8c8c8c);
-        border: 1px solid var(--vscode-panel-border, #454545);
+      .channels-section {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 0;
       }
 
-      .sign-out-btn:hover {
+      .channels-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 16px 8px;
+        font-size: 0.75em;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+      }
+
+      .add-channel-btn {
+        width: 20px;
+        height: 20px;
+        border: none;
+        background: transparent;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        cursor: pointer;
+        font-size: 1.2em;
+        line-height: 1;
+        border-radius: 4px;
+      }
+
+      .add-channel-btn:hover {
         background-color: var(--vscode-list-hoverBackground, #2a2d2e);
+        color: var(--vscode-foreground, #cccccc);
       }
 
-      .github-icon {
-        flex-shrink: 0;
+      .channel-list {
+        list-style: none;
       }
 
-      .chat-header .description {
-        color: var(--vscode-descriptionForeground, #8c8c8c);
-        margin-bottom: 8px;
+      .channel-item {
+        display: flex;
+        align-items: center;
+        padding: 6px 16px;
+        cursor: pointer;
+        color: var(--vscode-foreground, #cccccc);
+        opacity: 0.8;
       }
 
-      .header-info {
-        font-size: 0.9em;
-        color: var(--vscode-descriptionForeground, #8c8c8c);
+      .channel-item:hover {
+        background-color: var(--vscode-list-hoverBackground, #2a2d2e);
+        opacity: 1;
       }
 
-      .header-info .error-count {
-        color: var(--vscode-errorForeground, #f48771);
-        margin-left: 12px;
+      .channel-item.active {
+        background-color: var(--vscode-list-activeSelectionBackground, #094771);
+        opacity: 1;
       }
 
-      .messages {
+      .channel-hash {
+        margin-right: 4px;
+        opacity: 0.6;
+      }
+
+      .channel-name {
+        font-size: 0.95em;
+      }
+
+      /* Main Content Styles */
+      .main-content {
+        flex: 1;
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        min-width: 0;
+      }
+
+      .chat-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--vscode-panel-border, #454545);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .chat-header h1 {
+        font-size: 1.2em;
+        font-weight: 600;
+      }
+
+      .message-count {
+        font-size: 0.85em;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+      }
+
+      .messages-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+      }
+
+      .messages-container > .message:first-child {
+        margin-top: 0;
       }
 
       .message {
@@ -622,6 +736,7 @@ ${content}
         border-radius: 8px;
         background-color: var(--vscode-editor-inactiveSelectionBackground, #3a3d41);
         border-left: 3px solid transparent;
+        margin-bottom: 12px;
       }
 
       .sender-color-0 { border-left-color: #4fc3f7; }
@@ -658,13 +773,8 @@ ${content}
         color: var(--vscode-foreground, #cccccc);
       }
 
-      .message-content p {
-        margin-bottom: 8px;
-      }
-
-      .message-content p:last-child {
-        margin-bottom: 0;
-      }
+      .message-content p { margin-bottom: 8px; }
+      .message-content p:last-child { margin-bottom: 0; }
 
       .message-content pre {
         background-color: var(--vscode-textBlockQuote-background, #2d2d2d);
@@ -743,7 +853,7 @@ ${content}
         text-align: center;
         margin: 24px 0 16px;
         color: var(--vscode-descriptionForeground, #8c8c8c);
-        font-size: 0.9em;
+        font-size: 0.85em;
         font-weight: 500;
       }
 
@@ -764,16 +874,11 @@ ${content}
         color: var(--vscode-descriptionForeground, #8c8c8c);
       }
 
-      .empty-state p {
-        margin-bottom: 8px;
-      }
-
-      .empty-state .hint {
-        font-size: 0.9em;
-      }
+      .empty-state p { margin-bottom: 8px; }
+      .empty-state .hint { font-size: 0.9em; }
 
       .errors {
-        margin-top: 24px;
+        margin: 0 20px 20px;
         padding: 16px;
         border-radius: 8px;
         background-color: var(--vscode-inputValidation-errorBackground, #5a1d1d);
@@ -785,31 +890,18 @@ ${content}
         color: var(--vscode-errorForeground, #f48771);
       }
 
-      .error-item {
-        margin-bottom: 8px;
-        font-size: 0.9em;
-      }
+      .error-item { margin-bottom: 8px; font-size: 0.9em; }
+      .error-file { font-weight: 600; margin-right: 8px; }
+      .error-message { color: var(--vscode-descriptionForeground, #8c8c8c); }
 
-      .error-file {
-        font-weight: 600;
-        margin-right: 8px;
-      }
-
-      .error-message {
-        color: var(--vscode-descriptionForeground, #8c8c8c);
-      }
-
-      /* Input Area Styles */
+      /* Input Area */
       .input-area {
-        flex-shrink: 0;
+        padding: 16px 20px;
         border-top: 1px solid var(--vscode-panel-border, #454545);
         background-color: var(--vscode-editor-background, #1e1e1e);
-        padding: 16px 20px;
       }
 
       .input-container {
-        max-width: 800px;
-        margin: 0 auto;
         display: flex;
         align-items: flex-end;
         gap: 12px;
@@ -818,7 +910,7 @@ ${content}
       .input-avatar {
         width: 32px;
         height: 32px;
-        border-radius: 50%;
+        border-radius: 4px;
         flex-shrink: 0;
       }
 
@@ -858,32 +950,20 @@ ${content}
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transition: background-color 0.15s;
       }
 
       .send-btn:hover {
         background-color: var(--vscode-button-hoverBackground, #1177bb);
       }
 
-      .send-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-
-      /* Disabled input state */
       .input-disabled {
-        max-width: 800px;
-        margin: 0 auto;
-        padding: 12px;
-        background-color: var(--vscode-editor-inactiveSelectionBackground, #3a3d41);
-        border-radius: 8px;
-      }
-
-      .input-disabled-content {
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 16px;
+        padding: 12px;
+        background-color: var(--vscode-editor-inactiveSelectionBackground, #3a3d41);
+        border-radius: 8px;
       }
 
       .input-disabled-text {
@@ -892,9 +972,6 @@ ${content}
       }
 
       .sign-in-btn-small {
-        display: flex;
-        align-items: center;
-        gap: 6px;
         padding: 6px 12px;
         border: none;
         border-radius: 4px;
@@ -924,6 +1001,24 @@ ${content}
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
       }
 
+      // Handle channel clicks
+      document.querySelectorAll('.channel-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const channel = el.getAttribute('data-channel');
+          if (channel) {
+            vscode.postMessage({ type: 'switchChannel', payload: channel });
+          }
+        });
+      });
+
+      // Handle add channel button
+      const addChannelBtn = document.getElementById('addChannelBtn');
+      if (addChannelBtn) {
+        addChannelBtn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'createChannel' });
+        });
+      }
+
       // Handle message clicks to open source file
       document.querySelectorAll('.message').forEach(el => {
         el.addEventListener('dblclick', () => {
@@ -934,10 +1029,10 @@ ${content}
         });
       });
 
-      // Handle sign in button (header)
-      const signInBtn = document.getElementById('signInBtn');
-      if (signInBtn) {
-        signInBtn.addEventListener('click', () => {
+      // Handle sidebar sign in button
+      const sidebarSignInBtn = document.getElementById('sidebarSignInBtn');
+      if (sidebarSignInBtn) {
+        sidebarSignInBtn.addEventListener('click', () => {
           vscode.postMessage({ type: 'signIn' });
         });
       }
@@ -947,14 +1042,6 @@ ${content}
       if (signInBtnInput) {
         signInBtnInput.addEventListener('click', () => {
           vscode.postMessage({ type: 'signIn' });
-        });
-      }
-
-      // Handle sign out button
-      const signOutBtn = document.getElementById('signOutBtn');
-      if (signOutBtn) {
-        signOutBtn.addEventListener('click', () => {
-          vscode.postMessage({ type: 'signOut' });
         });
       }
 

@@ -1,17 +1,10 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { ChatPanel } from './chatPanel';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
 import {
   hasVibeChannel,
   initializeVibeChannel,
-  showChannelPicker,
   getChannels,
-  isChannelFolder,
-  isVibeChannelRoot,
-  getWorkspaceFromVibeChannelRoot,
-  VIBECHANNEL_FOLDER,
-  DEFAULT_CHANNEL,
   getVibeChannelRoot,
 } from './channelManager';
 
@@ -27,70 +20,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(authService);
 
   // Register commands
-  const openFolderCommand = vscode.commands.registerCommand(
-    'vibechannel.openFolder',
-    async (uri?: vscode.Uri) => {
-      let folderPath: string | undefined;
-
-      if (uri) {
-        // Called from context menu - check if it's a channel folder
-        folderPath = uri.fsPath;
-
-        // If it's a channel folder inside .vibechannel, open it directly
-        if (isChannelFolder(folderPath)) {
-          ChatPanel.createOrShow(folderPath);
-          return;
-        }
-
-        // If it's the .vibechannel folder itself, show channel picker for parent workspace
-        if (isVibeChannelRoot(folderPath)) {
-          const workspacePath = getWorkspaceFromVibeChannelRoot(folderPath);
-          const channelPath = await showChannelPicker(workspacePath);
-          if (channelPath) {
-            ChatPanel.createOrShow(channelPath);
-          }
-          return;
-        }
-
-        // Check if it has a .vibechannel subfolder
-        if (hasVibeChannel(folderPath)) {
-          // Show channel picker for this folder
-          const channelPath = await showChannelPicker(folderPath);
-          if (channelPath) {
-            ChatPanel.createOrShow(channelPath);
-          }
-          return;
-        }
-
-        // Not a VibeChannel folder, ask to initialize
-        const action = await vscode.window.showInformationMessage(
-          'This folder does not have VibeChannel set up. Would you like to initialize it?',
-          'Initialize',
-          'Cancel'
-        );
-
-        if (action === 'Initialize') {
-          const generalPath = initializeVibeChannel(folderPath);
-          vscode.window.showInformationMessage('VibeChannel initialized with #general channel');
-          ChatPanel.createOrShow(generalPath);
-        }
-      } else {
-        // Called from command palette - use workspace folder
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-          vscode.window.showErrorMessage('No workspace folder open');
-          return;
-        }
-
-        const workspacePath = workspaceFolders[0].uri.fsPath;
-        const channelPath = await showChannelPicker(workspacePath);
-        if (channelPath) {
-          ChatPanel.createOrShow(channelPath);
-        }
-      }
-    }
-  );
-
   const openCurrentCommand = vscode.commands.registerCommand(
     'vibechannel.openCurrent',
     async () => {
@@ -113,18 +42,16 @@ export function activate(context: vscode.ExtensionContext): void {
         );
 
         if (action === 'Initialize') {
-          const generalPath = initializeVibeChannel(workspacePath);
+          initializeVibeChannel(workspacePath);
           vscode.window.showInformationMessage('VibeChannel initialized with #general channel');
-          ChatPanel.createOrShow(generalPath);
+        } else {
+          return;
         }
-        return;
       }
 
-      // Show channel picker
-      const channelPath = await showChannelPicker(workspacePath);
-      if (channelPath) {
-        ChatPanel.createOrShow(channelPath);
-      }
+      // Open the .vibechannel folder
+      const vibechannelPath = getVibeChannelRoot(workspacePath);
+      ChatPanel.createOrShow(vibechannelPath);
     }
   );
 
@@ -190,7 +117,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    openFolderCommand,
     openCurrentCommand,
     refreshCommand,
     signInCommand,

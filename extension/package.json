@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Render a folder of markdown files as a chat conversation",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
@@ -30,13 +30,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "vibechannel.openFolder",
-        "title": "Open Folder as VibeChannel",
-        "category": "VibeChannel"
-      },
-      {
         "command": "vibechannel.openCurrent",
-        "title": "Open Current Folder as Chat",
+        "title": "Open VibeChannel",
         "category": "VibeChannel"
       },
       {
@@ -60,15 +55,6 @@
         "category": "VibeChannel"
       }
     ],
-    "menus": {
-      "explorer/context": [
-        {
-          "command": "vibechannel.openFolder",
-          "when": "explorerResourceIsFolder",
-          "group": "navigation"
-        }
-      ]
-    },
     "configuration": {
       "title": "VibeChannel",
       "properties": {
