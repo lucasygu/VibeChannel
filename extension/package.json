@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Render a folder of markdown files as a chat conversation",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,7 @@
     "decentralized"
   ],
   "activationEvents": [
-    "workspaceContains:schema.md"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
