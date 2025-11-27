@@ -254,28 +254,30 @@ export class GitService {
   }
 
   /**
-   * Create orphan branch with empty commit.
-   * NO files are created in the main working directory.
+   * Create orphan branch with empty commit using git plumbing commands.
+   * This approach NEVER touches the working directory or requires checkout.
    */
   private async createOrphanBranch(): Promise<void> {
     if (!this.config) return;
 
     const { repoPath, branchName } = this.config;
 
-    const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+    // Create an empty tree object
+    const emptyTree = execSync('git hash-object -t tree /dev/null', {
       cwd: repoPath,
       encoding: 'utf-8',
     }).trim();
 
-    try {
-      await execAsync(`git checkout --orphan ${branchName}`, { cwd: repoPath });
-      await execAsync('git rm -rf --cached .', { cwd: repoPath }).catch(() => {});
-      await execAsync('git commit --allow-empty -m "Initialize VibeChannel branch"', { cwd: repoPath });
-      await execAsync(`git checkout ${currentBranch}`, { cwd: repoPath });
-    } catch (error) {
-      await execAsync(`git checkout ${currentBranch}`, { cwd: repoPath }).catch(() => {});
-      throw error;
-    }
+    // Create a commit with that empty tree (no parent = orphan)
+    const commit = execSync(
+      `git commit-tree ${emptyTree} -m "Initialize VibeChannel branch"`,
+      { cwd: repoPath, encoding: 'utf-8' }
+    ).trim();
+
+    // Create the branch ref pointing to that commit
+    await execAsync(`git update-ref refs/heads/${branchName} ${commit}`, { cwd: repoPath });
+
+    console.log(`GitService: Created orphan branch '${branchName}' at ${commit}`);
   }
 
   /**
