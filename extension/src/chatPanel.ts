@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { Conversation, loadConversation, updateConversationMessage, removeConversationMessage } from './conversationLoader';
 import { FolderWatcher, WatcherEvent } from './folderWatcher';
 import { Message } from './messageParser';
@@ -142,6 +144,59 @@ export class ChatPanel {
       case 'signOut':
         vscode.commands.executeCommand('vibechannel.signOut');
         break;
+      case 'sendMessage':
+        if (typeof message.payload === 'string' && message.payload.trim()) {
+          this.createMessageFile(message.payload.trim());
+        }
+        break;
+    }
+  }
+
+  private async createMessageFile(content: string): Promise<void> {
+    const authService = GitHubAuthService.getInstance();
+    const user = authService.getUser();
+
+    if (!user) {
+      vscode.window.showErrorMessage('You must be signed in to send messages');
+      return;
+    }
+
+    try {
+      // Generate timestamp for filename: YYYYMMDDTHHMMSS
+      const now = new Date();
+      const fileTimestamp = now.toISOString()
+        .replace(/[-:]/g, '')
+        .replace(/\.\d{3}Z$/, '')
+        .replace('T', 'T');
+
+      // ISO timestamp for frontmatter
+      const isoTimestamp = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+      // Sender from GitHub username (lowercase)
+      const sender = user.login.toLowerCase();
+
+      // Generate random 6-char ID
+      const randomId = crypto.randomBytes(3).toString('hex');
+
+      // Construct filename
+      const filename = `${fileTimestamp}-${sender}-${randomId}.md`;
+      const filepath = path.join(this.folderPath, filename);
+
+      // Create file content
+      const fileContent = `---
+from: ${sender}
+date: ${isoTimestamp}
+---
+
+${content}
+`;
+
+      // Write file
+      fs.writeFileSync(filepath, fileContent, 'utf-8');
+
+      // The file watcher will pick up the new file and refresh the view
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to create message: ${error}`);
     }
   }
 
@@ -172,34 +227,40 @@ export class ChatPanel {
   </style>
 </head>
 <body>
-  <div class="chat-container">
-    <header class="chat-header">
-      <div class="header-top">
-        <h1>${this.escapeHtml(this.conversation.schema.metadata.name || 'Conversation')}</h1>
-        <div class="auth-section">
-          ${user ? this.renderUserInfo(user) : this.renderSignInButton()}
+  <div class="chat-wrapper">
+    <div class="chat-container">
+      <header class="chat-header">
+        <div class="header-top">
+          <h1>${this.escapeHtml(this.conversation.schema.metadata.name || 'Conversation')}</h1>
+          <div class="auth-section">
+            ${user ? this.renderUserInfo(user) : this.renderSignInButton()}
+          </div>
         </div>
-      </div>
-      ${this.conversation.schema.metadata.description
-        ? `<p class="description">${this.escapeHtml(this.conversation.schema.metadata.description)}</p>`
-        : ''}
-      <div class="header-info">
-        <span class="message-count">${this.conversation.messages.length} messages</span>
-        ${this.conversation.errors.length > 0
-          ? `<span class="error-count">${this.conversation.errors.length} errors</span>`
+        ${this.conversation.schema.metadata.description
+          ? `<p class="description">${this.escapeHtml(this.conversation.schema.metadata.description)}</p>`
           : ''}
-      </div>
-    </header>
+        <div class="header-info">
+          <span class="message-count">${this.conversation.messages.length} messages</span>
+          ${this.conversation.errors.length > 0
+            ? `<span class="error-count">${this.conversation.errors.length} errors</span>`
+            : ''}
+        </div>
+      </header>
 
-    <div class="messages">
-      ${this.renderMessages(timestampDisplay === 'relative')}
+      <div class="messages" id="messagesContainer">
+        ${this.renderMessages(timestampDisplay === 'relative')}
+      </div>
+
+      ${this.conversation.errors.length > 0 ? this.renderErrors() : ''}
     </div>
 
-    ${this.conversation.errors.length > 0 ? this.renderErrors() : ''}
+    <div class="input-area">
+      ${user ? this.renderInputField(user) : this.renderInputDisabled()}
+    </div>
   </div>
 
   <script>
-    ${this.getScript()}
+    ${this.getScript(!!user)}
   </script>
 </body>
 </html>`;
@@ -296,6 +357,37 @@ export class ChatPanel {
     </button>`;
   }
 
+  private renderInputField(user: GitHubUser): string {
+    return `<div class="input-container">
+      <img class="input-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
+      <textarea
+        id="messageInput"
+        class="message-input"
+        placeholder="Type a message..."
+        rows="1"
+      ></textarea>
+      <button class="send-btn" id="sendBtn" title="Send message (Cmd+Enter)">
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+        </svg>
+      </button>
+    </div>`;
+  }
+
+  private renderInputDisabled(): string {
+    return `<div class="input-disabled">
+      <div class="input-disabled-content">
+        <span class="input-disabled-text">Sign in to join the conversation</span>
+        <button class="sign-in-btn-small" id="signInBtnInput">
+          <svg class="github-icon" viewBox="0 0 16 16" width="14" height="14">
+            <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          Sign in with GitHub
+        </button>
+      </div>
+    </div>`;
+  }
+
   private renderMarkdown(content: string): string {
     try {
       return marked(content, { async: false }) as string;
@@ -378,6 +470,11 @@ export class ChatPanel {
         padding: 0;
       }
 
+      html, body {
+        height: 100%;
+        overflow: hidden;
+      }
+
       body {
         font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
         font-size: var(--vscode-font-size, 13px);
@@ -386,10 +483,20 @@ export class ChatPanel {
         line-height: 1.5;
       }
 
+      .chat-wrapper {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
       .chat-container {
+        flex: 1;
+        overflow-y: auto;
         max-width: 800px;
+        width: 100%;
         margin: 0 auto;
         padding: 20px;
+        padding-bottom: 0;
       }
 
       .chat-header {
@@ -670,15 +777,131 @@ export class ChatPanel {
       .error-message {
         color: var(--vscode-descriptionForeground, #8c8c8c);
       }
+
+      /* Input Area Styles */
+      .input-area {
+        flex-shrink: 0;
+        border-top: 1px solid var(--vscode-panel-border, #454545);
+        background-color: var(--vscode-editor-background, #1e1e1e);
+        padding: 16px 20px;
+      }
+
+      .input-container {
+        max-width: 800px;
+        margin: 0 auto;
+        display: flex;
+        align-items: flex-end;
+        gap: 12px;
+      }
+
+      .input-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .message-input {
+        flex: 1;
+        padding: 10px 14px;
+        border: 1px solid var(--vscode-input-border, #3c3c3c);
+        border-radius: 8px;
+        background-color: var(--vscode-input-background, #3c3c3c);
+        color: var(--vscode-input-foreground, #cccccc);
+        font-family: inherit;
+        font-size: inherit;
+        line-height: 1.5;
+        resize: none;
+        min-height: 42px;
+        max-height: 200px;
+      }
+
+      .message-input:focus {
+        outline: none;
+        border-color: var(--vscode-focusBorder, #007fd4);
+      }
+
+      .message-input::placeholder {
+        color: var(--vscode-input-placeholderForeground, #8c8c8c);
+      }
+
+      .send-btn {
+        width: 42px;
+        height: 42px;
+        border: none;
+        border-radius: 8px;
+        background-color: var(--vscode-button-background, #0e639c);
+        color: var(--vscode-button-foreground, #ffffff);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background-color 0.15s;
+      }
+
+      .send-btn:hover {
+        background-color: var(--vscode-button-hoverBackground, #1177bb);
+      }
+
+      .send-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Disabled input state */
+      .input-disabled {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 12px;
+        background-color: var(--vscode-editor-inactiveSelectionBackground, #3a3d41);
+        border-radius: 8px;
+      }
+
+      .input-disabled-content {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+      }
+
+      .input-disabled-text {
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        font-size: 0.9em;
+      }
+
+      .sign-in-btn-small {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.85em;
+        font-family: inherit;
+        background-color: var(--vscode-button-background, #0e639c);
+        color: var(--vscode-button-foreground, #ffffff);
+      }
+
+      .sign-in-btn-small:hover {
+        background-color: var(--vscode-button-hoverBackground, #1177bb);
+      }
     `;
   }
 
-  private getScript(): string {
+  private getScript(isSignedIn: boolean): string {
     return `
       const vscode = acquireVsCodeApi();
 
       // Signal ready
       vscode.postMessage({ type: 'ready' });
+
+      // Scroll to bottom of messages
+      const messagesContainer = document.getElementById('messagesContainer');
+      if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
 
       // Handle message clicks to open source file
       document.querySelectorAll('.message').forEach(el => {
@@ -690,10 +913,18 @@ export class ChatPanel {
         });
       });
 
-      // Handle sign in button
+      // Handle sign in button (header)
       const signInBtn = document.getElementById('signInBtn');
       if (signInBtn) {
         signInBtn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'signIn' });
+        });
+      }
+
+      // Handle sign in button (input area)
+      const signInBtnInput = document.getElementById('signInBtnInput');
+      if (signInBtnInput) {
+        signInBtnInput.addEventListener('click', () => {
           vscode.postMessage({ type: 'signIn' });
         });
       }
@@ -705,6 +936,45 @@ export class ChatPanel {
           vscode.postMessage({ type: 'signOut' });
         });
       }
+
+      ${isSignedIn ? `
+      // Message input handling
+      const messageInput = document.getElementById('messageInput');
+      const sendBtn = document.getElementById('sendBtn');
+
+      function sendMessage() {
+        const content = messageInput.value.trim();
+        if (content) {
+          vscode.postMessage({ type: 'sendMessage', payload: content });
+          messageInput.value = '';
+          messageInput.style.height = 'auto';
+        }
+      }
+
+      // Send button click
+      if (sendBtn) {
+        sendBtn.addEventListener('click', sendMessage);
+      }
+
+      // Auto-resize textarea
+      if (messageInput) {
+        messageInput.addEventListener('input', () => {
+          messageInput.style.height = 'auto';
+          messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
+        });
+
+        // Cmd+Enter or Ctrl+Enter to send
+        messageInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            sendMessage();
+          }
+        });
+
+        // Focus the input
+        messageInput.focus();
+      }
+      ` : ''}
     `;
   }
 
