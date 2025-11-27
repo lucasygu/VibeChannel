@@ -1,8 +1,19 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { ChatPanel } from './chatPanel';
-import { isVibeChannelFolder } from './schemaParser';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
+import {
+  hasVibeChannel,
+  initializeVibeChannel,
+  showChannelPicker,
+  getChannels,
+  isChannelFolder,
+  isVibeChannelRoot,
+  getWorkspaceFromVibeChannelRoot,
+  VIBECHANNEL_FOLDER,
+  DEFAULT_CHANNEL,
+  getVibeChannelRoot,
+} from './channelManager';
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 let accountStatusBarItem: vscode.StatusBarItem | undefined;
@@ -22,36 +33,59 @@ export function activate(context: vscode.ExtensionContext): void {
       let folderPath: string | undefined;
 
       if (uri) {
-        // Called from context menu
+        // Called from context menu - check if it's a channel folder
         folderPath = uri.fsPath;
-      } else {
-        // Called from command palette - show folder picker
-        const result = await vscode.window.showOpenDialog({
-          canSelectFiles: false,
-          canSelectFolders: true,
-          canSelectMany: false,
-          openLabel: 'Open folder as VibeChannel',
-          title: 'Select a VibeChannel folder',
-        });
 
-        if (result && result.length > 0) {
-          folderPath = result[0].fsPath;
-        }
-      }
-
-      if (folderPath) {
-        if (isVibeChannelFolder(folderPath)) {
+        // If it's a channel folder inside .vibechannel, open it directly
+        if (isChannelFolder(folderPath)) {
           ChatPanel.createOrShow(folderPath);
-        } else {
-          const action = await vscode.window.showWarningMessage(
-            'This folder does not contain a schema.md file. Would you like to open it anyway?',
-            'Open Anyway',
-            'Cancel'
-          );
+          return;
+        }
 
-          if (action === 'Open Anyway') {
-            ChatPanel.createOrShow(folderPath);
+        // If it's the .vibechannel folder itself, show channel picker for parent workspace
+        if (isVibeChannelRoot(folderPath)) {
+          const workspacePath = getWorkspaceFromVibeChannelRoot(folderPath);
+          const channelPath = await showChannelPicker(workspacePath);
+          if (channelPath) {
+            ChatPanel.createOrShow(channelPath);
           }
+          return;
+        }
+
+        // Check if it has a .vibechannel subfolder
+        if (hasVibeChannel(folderPath)) {
+          // Show channel picker for this folder
+          const channelPath = await showChannelPicker(folderPath);
+          if (channelPath) {
+            ChatPanel.createOrShow(channelPath);
+          }
+          return;
+        }
+
+        // Not a VibeChannel folder, ask to initialize
+        const action = await vscode.window.showInformationMessage(
+          'This folder does not have VibeChannel set up. Would you like to initialize it?',
+          'Initialize',
+          'Cancel'
+        );
+
+        if (action === 'Initialize') {
+          const generalPath = initializeVibeChannel(folderPath);
+          vscode.window.showInformationMessage('VibeChannel initialized with #general channel');
+          ChatPanel.createOrShow(generalPath);
+        }
+      } else {
+        // Called from command palette - use workspace folder
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+          vscode.window.showErrorMessage('No workspace folder open');
+          return;
+        }
+
+        const workspacePath = workspaceFolders[0].uri.fsPath;
+        const channelPath = await showChannelPicker(workspacePath);
+        if (channelPath) {
+          ChatPanel.createOrShow(channelPath);
         }
       }
     }
@@ -67,50 +101,29 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      // Find folders with schema.md
-      const vibeChannelFolders: vscode.WorkspaceFolder[] = [];
+      // Use the first workspace folder
+      const workspacePath = workspaceFolders[0].uri.fsPath;
 
-      for (const folder of workspaceFolders) {
-        if (isVibeChannelFolder(folder.uri.fsPath)) {
-          vibeChannelFolders.push(folder);
-        }
-      }
-
-      if (vibeChannelFolders.length === 0) {
-        // Check if any file is open and its parent folder has schema.md
-        const activeEditor = vscode.window.activeTextEditor;
-        if (activeEditor) {
-          const folderPath = path.dirname(activeEditor.document.uri.fsPath);
-          if (isVibeChannelFolder(folderPath)) {
-            ChatPanel.createOrShow(folderPath);
-            return;
-          }
-        }
-
-        vscode.window.showInformationMessage(
-          'No VibeChannel folder found in workspace. A VibeChannel folder must contain a schema.md file.'
+      // Check if .vibechannel exists, if not initialize it
+      if (!hasVibeChannel(workspacePath)) {
+        const action = await vscode.window.showInformationMessage(
+          'VibeChannel is not set up in this workspace. Would you like to initialize it?',
+          'Initialize',
+          'Cancel'
         );
+
+        if (action === 'Initialize') {
+          const generalPath = initializeVibeChannel(workspacePath);
+          vscode.window.showInformationMessage('VibeChannel initialized with #general channel');
+          ChatPanel.createOrShow(generalPath);
+        }
         return;
       }
 
-      if (vibeChannelFolders.length === 1) {
-        ChatPanel.createOrShow(vibeChannelFolders[0].uri.fsPath);
-        return;
-      }
-
-      // Multiple folders found - let user pick
-      const items = vibeChannelFolders.map((folder) => ({
-        label: folder.name,
-        description: folder.uri.fsPath,
-        folder,
-      }));
-
-      const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Select a VibeChannel folder to open',
-      });
-
-      if (selected) {
-        ChatPanel.createOrShow(selected.folder.uri.fsPath);
+      // Show channel picker
+      const channelPath = await showChannelPicker(workspacePath);
+      if (channelPath) {
+        ChatPanel.createOrShow(channelPath);
       }
     }
   );
@@ -185,13 +198,15 @@ export function activate(context: vscode.ExtensionContext): void {
     showAccountCommand
   );
 
-  // Create status bar item for VibeChannel
+  // Create status bar item for VibeChannel - always show it
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
   );
   statusBarItem.command = 'vibechannel.openCurrent';
-  statusBarItem.tooltip = 'Open VibeChannel Chat';
+  statusBarItem.tooltip = 'Open VibeChannel';
+  statusBarItem.text = '$(comment-discussion) VibeChannel';
+  statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
   // Create account status bar item
@@ -209,7 +224,7 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Update status bar based on current workspace
+  // Update status bar to show channel count if initialized
   updateStatusBar();
 
   // Watch for workspace folder changes
@@ -218,25 +233,6 @@ export function activate(context: vscode.ExtensionContext): void {
       updateStatusBar();
     })
   );
-
-  // Watch for active editor changes
-  context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(() => {
-      updateStatusBar();
-    })
-  );
-
-  // Auto-open if configured and workspace is a VibeChannel folder
-  const config = vscode.workspace.getConfiguration('vibechannel');
-  if (config.get('autoOpen', false)) {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      const firstFolder = workspaceFolders[0].uri.fsPath;
-      if (isVibeChannelFolder(firstFolder)) {
-        ChatPanel.createOrShow(firstFolder);
-      }
-    }
-  }
 }
 
 function updateStatusBar(): void {
@@ -245,31 +241,18 @@ function updateStatusBar(): void {
   }
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
-  let showStatusBar = false;
 
-  if (workspaceFolders) {
-    for (const folder of workspaceFolders) {
-      if (isVibeChannelFolder(folder.uri.fsPath)) {
-        showStatusBar = true;
-        break;
-      }
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    const workspacePath = workspaceFolders[0].uri.fsPath;
+
+    if (hasVibeChannel(workspacePath)) {
+      const channels = getChannels(workspacePath);
+      statusBarItem.text = `$(comment-discussion) VibeChannel (${channels.length})`;
+      statusBarItem.tooltip = `Open VibeChannel - ${channels.length} channel${channels.length !== 1 ? 's' : ''}`;
+    } else {
+      statusBarItem.text = '$(comment-discussion) VibeChannel';
+      statusBarItem.tooltip = 'Initialize VibeChannel';
     }
-  }
-
-  // Also check active editor's folder
-  const activeEditor = vscode.window.activeTextEditor;
-  if (activeEditor) {
-    const folderPath = path.dirname(activeEditor.document.uri.fsPath);
-    if (isVibeChannelFolder(folderPath)) {
-      showStatusBar = true;
-    }
-  }
-
-  if (showStatusBar) {
-    statusBarItem.text = '$(comment-discussion) VibeChannel';
-    statusBarItem.show();
-  } else {
-    statusBarItem.hide();
   }
 }
 

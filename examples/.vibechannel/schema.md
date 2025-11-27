@@ -1,14 +1,13 @@
 # VibeChannel Schema
 
-This file defines the format for this VibeChannel conversation.
+This file defines the format for VibeChannel conversations.
 
-## Metadata
+## Folder Structure
 
 ```yaml
-name: Project Discussion
-description: Technical decisions for the widget project
-created: 2025-01-15T10:00:00Z
-version: 1.0
+root: .vibechannel/
+channels: subfolders (e.g., general/, random/, dev-chat/)
+messages: markdown files inside channel folders
 ```
 
 ## Filename Convention
@@ -68,18 +67,6 @@ Here is my message content with **markdown** support.
 rendering:
   sort_by: date
   order: ascending
-  group_by: date          # Group messages by day
-  timestamp_display: relative  # "relative" or "absolute"
-```
-
-## Participants (Informational)
-
-```yaml
-participants:
-  - name: lucas
-    display_name: Lucas
-  - name: alice
-    display_name: Alice
-  - name: bob
-    display_name: Bob
+  group_by: date
+  timestamp_display: relative
 ```

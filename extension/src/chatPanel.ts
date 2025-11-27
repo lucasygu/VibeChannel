@@ -17,6 +17,7 @@ export class ChatPanel {
 
   private readonly panel: vscode.WebviewPanel;
   private readonly folderPath: string;
+  private readonly channelName: string | null;
   private conversation: Conversation;
   private watcher: FolderWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
@@ -39,9 +40,19 @@ export class ChatPanel {
 
     const conversation = loadConversation(folderPath);
 
+    // Extract channel name if this is a channel folder inside .vibechannel
+    const parentDir = path.dirname(folderPath);
+    const parentName = path.basename(parentDir);
+    const channelName = parentName === '.vibechannel' ? path.basename(folderPath) : null;
+
+    // Set panel title to channel name or schema name
+    const panelTitle = channelName
+      ? `#${channelName}`
+      : conversation.schema.metadata.name || 'VibeChannel';
+
     const panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
-      conversation.schema.metadata.name || 'VibeChannel',
+      panelTitle,
       column || vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -50,7 +61,7 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, folderPath, conversation);
+    ChatPanel.currentPanel = new ChatPanel(panel, folderPath, conversation, channelName);
   }
 
   public static refresh(): void {
@@ -62,10 +73,12 @@ export class ChatPanel {
   private constructor(
     panel: vscode.WebviewPanel,
     folderPath: string,
-    conversation: Conversation
+    conversation: Conversation,
+    channelName: string | null
   ) {
     this.panel = panel;
     this.folderPath = folderPath;
+    this.channelName = channelName;
     this.conversation = conversation;
 
     // Set initial content
@@ -215,13 +228,21 @@ ${content}
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
 
+    // Use channel name if available, otherwise fall back to schema name
+    const headerTitle = this.channelName
+      ? `#${this.channelName}`
+      : this.conversation.schema.metadata.name || 'Conversation';
+    const pageTitle = this.channelName
+      ? `#${this.channelName} - VibeChannel`
+      : this.conversation.schema.metadata.name || 'VibeChannel';
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https:;">
-  <title>${this.escapeHtml(this.conversation.schema.metadata.name || 'VibeChannel')}</title>
+  <title>${this.escapeHtml(pageTitle)}</title>
   <style>
     ${this.getStyles()}
   </style>
@@ -231,7 +252,7 @@ ${content}
     <div class="chat-container">
       <header class="chat-header">
         <div class="header-top">
-          <h1>${this.escapeHtml(this.conversation.schema.metadata.name || 'Conversation')}</h1>
+          <h1>${this.escapeHtml(headerTitle)}</h1>
           <div class="auth-section">
             ${user ? this.renderUserInfo(user) : this.renderSignInButton()}
           </div>

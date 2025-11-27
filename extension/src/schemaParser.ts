@@ -210,14 +210,27 @@ export function parseSchema(content: string): SchemaConfig {
 
 /**
  * Load and parse schema.md from a folder
+ * If the folder is a channel folder (inside .vibechannel), looks for schema in parent
  */
 export function loadSchema(folderPath: string): SchemaConfig {
+  // First, try schema.md in the current folder
   const schemaPath = path.join(folderPath, 'schema.md');
 
   try {
     if (fs.existsSync(schemaPath)) {
       const content = fs.readFileSync(schemaPath, 'utf-8');
       return parseSchema(content);
+    }
+
+    // If not found and this is a channel folder, look in parent (.vibechannel)
+    const parentDir = path.dirname(folderPath);
+    const parentName = path.basename(parentDir);
+    if (parentName === '.vibechannel') {
+      const parentSchemaPath = path.join(parentDir, 'schema.md');
+      if (fs.existsSync(parentSchemaPath)) {
+        const content = fs.readFileSync(parentSchemaPath, 'utf-8');
+        return parseSchema(content);
+      }
     }
   } catch (error) {
     console.error('Error loading schema:', error);
