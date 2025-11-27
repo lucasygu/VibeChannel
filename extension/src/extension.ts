@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import { execSync } from 'child_process';
 import { ChatPanel } from './chatPanel';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
-import {
-  hasVibeChannel,
-  initializeVibeChannel,
-  getChannels,
-  getVibeChannelRoot,
-} from './channelManager';
+import { GitService } from './gitService';
+import { SyncService } from './syncService';
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 let accountStatusBarItem: vscode.StatusBarItem | undefined;
@@ -33,25 +32,33 @@ export function activate(context: vscode.ExtensionContext): void {
       // Use the first workspace folder
       const workspacePath = workspaceFolders[0].uri.fsPath;
 
-      // Check if .vibechannel exists, if not initialize it
-      if (!hasVibeChannel(workspacePath)) {
+      // Check if this is a git repository
+      if (!isGitRepo(workspacePath)) {
+        vscode.window.showErrorMessage(
+          'VibeChannel requires a Git repository. Initialize git first with "git init".'
+        );
+        return;
+      }
+
+      // Check if vibechannel branch exists, if not ask to initialize
+      const gitService = GitService.getInstance();
+      const isInitialized = gitService.isInitialized();
+
+      if (!isInitialized) {
         const action = await vscode.window.showInformationMessage(
-          'VibeChannel is not set up in this workspace. Would you like to initialize it?',
+          'VibeChannel is not set up in this repository. Would you like to initialize it?',
           'Initialize',
           'Cancel'
         );
 
-        if (action === 'Initialize') {
-          initializeVibeChannel(workspacePath);
-          vscode.window.showInformationMessage('VibeChannel initialized with #general channel');
-        } else {
+        if (action !== 'Initialize') {
           return;
         }
       }
 
-      // Open the .vibechannel folder
-      const vibechannelPath = getVibeChannelRoot(workspacePath);
-      ChatPanel.createOrShow(vibechannelPath);
+      // Open the chat panel (this will initialize if needed)
+      await ChatPanel.createOrShow(workspacePath);
+      updateStatusBar();
     }
   );
 
@@ -161,6 +168,15 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
+function isGitRepo(workspacePath: string): boolean {
+  try {
+    execSync('git rev-parse --git-dir', { cwd: workspacePath, stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function updateStatusBar(): void {
   if (!statusBarItem) {
     return;
@@ -171,13 +187,26 @@ function updateStatusBar(): void {
   if (workspaceFolders && workspaceFolders.length > 0) {
     const workspacePath = workspaceFolders[0].uri.fsPath;
 
-    if (hasVibeChannel(workspacePath)) {
-      const channels = getChannels(workspacePath);
-      statusBarItem.text = `$(comment-discussion) VibeChannel (${channels.length})`;
-      statusBarItem.tooltip = `Open VibeChannel - ${channels.length} channel${channels.length !== 1 ? 's' : ''}`;
+    if (isGitRepo(workspacePath)) {
+      const gitService = GitService.getInstance();
+      const worktreePath = gitService.getWorktreePath();
+
+      if (worktreePath && fs.existsSync(worktreePath)) {
+        // Count channels in worktree
+        const channels = fs.readdirSync(worktreePath)
+          .filter((name) => {
+            const fullPath = path.join(worktreePath, name);
+            return fs.statSync(fullPath).isDirectory() && !name.startsWith('.');
+          });
+        statusBarItem.text = `$(comment-discussion) VibeChannel (${channels.length})`;
+        statusBarItem.tooltip = `Open VibeChannel - ${channels.length} channel${channels.length !== 1 ? 's' : ''}`;
+      } else {
+        statusBarItem.text = '$(comment-discussion) VibeChannel';
+        statusBarItem.tooltip = 'Initialize VibeChannel';
+      }
     } else {
       statusBarItem.text = '$(comment-discussion) VibeChannel';
-      statusBarItem.tooltip = 'Initialize VibeChannel';
+      statusBarItem.tooltip = 'Requires Git repository';
     }
   }
 }
@@ -200,4 +229,16 @@ function updateAccountStatusBar(user: GitHubUser | null): void {
 
 export function deactivate(): void {
   console.log('VibeChannel extension deactivated');
+
+  // Clean up services
+  try {
+    SyncService.getInstance().dispose();
+  } catch {
+    // Service may not have been initialized
+  }
+  try {
+    GitService.getInstance().dispose();
+  } catch {
+    // Service may not have been initialized
+  }
 }

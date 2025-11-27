@@ -3,11 +3,23 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { Conversation, loadConversation, updateConversationMessage, removeConversationMessage } from './conversationLoader';
+import { loadSchema } from './schemaParser';
 import { FolderWatcher, WatcherEvent } from './folderWatcher';
 import { Message } from './messageParser';
 import { marked } from 'marked';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
-import { getChannels, createChannel } from './channelManager';
+import { GitService } from './gitService';
+import { SyncService } from './syncService';
+
+function createEmptyConversation(folderPath: string): Conversation {
+  return {
+    folderPath,
+    schema: loadSchema(folderPath),
+    messages: [],
+    errors: [],
+    grouped: new Map(),
+  };
+}
 
 /**
  * Manages the chat webview panel with Slack-like sidebar
@@ -17,20 +29,22 @@ export class ChatPanel {
   private static readonly viewType = 'vibechannelChat';
 
   private readonly panel: vscode.WebviewPanel;
-  private readonly vibechannelPath: string;
+  private readonly repoPath: string;
+  private gitService: GitService;
+  private syncService: SyncService;
   private channels: string[];
   private currentChannel: string;
   private conversation: Conversation;
   private watcher: FolderWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
 
-  public static createOrShow(vibechannelPath: string): void {
+  public static async createOrShow(repoPath: string): Promise<void> {
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
 
-    // If we already have a panel for this .vibechannel folder, show it
-    if (ChatPanel.currentPanel && ChatPanel.currentPanel.vibechannelPath === vibechannelPath) {
+    // If we already have a panel for this repo, show it
+    if (ChatPanel.currentPanel && ChatPanel.currentPanel.repoPath === repoPath) {
       ChatPanel.currentPanel.panel.reveal(column);
       return;
     }
@@ -40,16 +54,29 @@ export class ChatPanel {
       ChatPanel.currentPanel.dispose();
     }
 
-    // Get workspace path from .vibechannel path
-    const workspacePath = path.dirname(vibechannelPath);
+    // Initialize GitService for this repo
+    const gitService = GitService.getInstance();
+    await gitService.initialize(repoPath);
 
-    // Get list of channels
-    const channels = getChannels(workspacePath);
+    // Initialize SyncService
+    const syncService = SyncService.getInstance();
+
+    // Get worktree path for resources
+    const worktreePath = gitService.getWorktreePath();
+    if (!worktreePath) {
+      vscode.window.showErrorMessage('VibeChannel: Failed to initialize worktree');
+      return;
+    }
+
+    // Get list of channels from the worktree
+    const channels = ChatPanel.getChannelsFromWorktree(worktreePath);
     const defaultChannel = channels.includes('general') ? 'general' : channels[0] || 'general';
 
     // Load conversation for the default channel
-    const channelPath = path.join(vibechannelPath, defaultChannel);
-    const conversation = loadConversation(channelPath);
+    const channelPath = path.join(worktreePath, defaultChannel);
+    const conversation = fs.existsSync(channelPath)
+      ? loadConversation(channelPath)
+      : createEmptyConversation(channelPath);
 
     const panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
@@ -58,11 +85,22 @@ export class ChatPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.file(vibechannelPath)],
+        localResourceRoots: [vscode.Uri.file(worktreePath)],
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, vibechannelPath, channels, defaultChannel, conversation);
+    ChatPanel.currentPanel = new ChatPanel(panel, repoPath, gitService, syncService, channels, defaultChannel, conversation);
+  }
+
+  private static getChannelsFromWorktree(worktreePath: string): string[] {
+    if (!fs.existsSync(worktreePath)) {
+      return [];
+    }
+    return fs.readdirSync(worktreePath)
+      .filter((name) => {
+        const fullPath = path.join(worktreePath, name);
+        return fs.statSync(fullPath).isDirectory() && !name.startsWith('.');
+      });
   }
 
   public static refresh(): void {
@@ -73,13 +111,17 @@ export class ChatPanel {
 
   private constructor(
     panel: vscode.WebviewPanel,
-    vibechannelPath: string,
+    repoPath: string,
+    gitService: GitService,
+    syncService: SyncService,
     channels: string[],
     currentChannel: string,
     conversation: Conversation
   ) {
     this.panel = panel;
-    this.vibechannelPath = vibechannelPath;
+    this.repoPath = repoPath;
+    this.gitService = gitService;
+    this.syncService = syncService;
     this.channels = channels;
     this.currentChannel = currentChannel;
     this.conversation = conversation;
@@ -92,6 +134,18 @@ export class ChatPanel {
     if (config.get('watchForChanges', true)) {
       this.startWatcher();
     }
+
+    // Start sync service
+    this.syncService.start();
+
+    // Listen for sync events
+    this.disposables.push(
+      this.syncService.onSync((event) => {
+        if (event.type === 'newMessages') {
+          this.refresh();
+        }
+      })
+    );
 
     // Handle panel disposal
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -116,7 +170,8 @@ export class ChatPanel {
   }
 
   private getCurrentChannelPath(): string {
-    return path.join(this.vibechannelPath, this.currentChannel);
+    const worktreePath = this.gitService.getWorktreePath();
+    return worktreePath ? path.join(worktreePath, this.currentChannel) : '';
   }
 
   private startWatcher(): void {
@@ -218,11 +273,17 @@ export class ChatPanel {
     });
 
     if (channelName) {
-      const workspacePath = path.dirname(this.vibechannelPath);
-      createChannel(workspacePath, channelName);
-      this.channels = getChannels(workspacePath);
-      this.switchChannel(channelName);
-      vscode.window.showInformationMessage(`Created #${channelName} channel`);
+      try {
+        await this.gitService.createChannel(channelName);
+        const worktreePath = this.gitService.getWorktreePath();
+        if (worktreePath) {
+          this.channels = ChatPanel.getChannelsFromWorktree(worktreePath);
+        }
+        this.switchChannel(channelName);
+        vscode.window.showInformationMessage(`Created #${channelName} channel`);
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to create channel: ${error}`);
+      }
     }
   }
 
@@ -254,7 +315,14 @@ export class ChatPanel {
 
       // Construct filename
       const filename = `${fileTimestamp}-${sender}-${randomId}.md`;
-      const filepath = path.join(this.getCurrentChannelPath(), filename);
+      const channelPath = this.getCurrentChannelPath();
+
+      if (!channelPath) {
+        vscode.window.showErrorMessage('Channel path not available');
+        return;
+      }
+
+      const filepath = path.join(channelPath, filename);
 
       // Create file content
       const fileContent = `---
@@ -268,6 +336,12 @@ ${content}
       // Write file
       fs.writeFileSync(filepath, fileContent, 'utf-8');
 
+      // Commit the message using GitService
+      await this.gitService.commitChanges(`Message from ${sender}`);
+
+      // Queue push via sync service
+      await this.syncService.queuePush();
+
       // The file watcher will pick up the new file and refresh the view
     } catch (error) {
       vscode.window.showErrorMessage(`Failed to create message: ${error}`);
@@ -275,12 +349,19 @@ ${content}
   }
 
   public refresh(): void {
-    // Refresh channels list
-    const workspacePath = path.dirname(this.vibechannelPath);
-    this.channels = getChannels(workspacePath);
+    // Refresh channels list from worktree
+    const worktreePath = this.gitService.getWorktreePath();
+    if (worktreePath) {
+      this.channels = ChatPanel.getChannelsFromWorktree(worktreePath);
+    }
 
     // Refresh conversation
-    this.conversation = loadConversation(this.getCurrentChannelPath());
+    const channelPath = this.getCurrentChannelPath();
+    if (channelPath) {
+      this.conversation = fs.existsSync(channelPath)
+        ? loadConversation(channelPath)
+        : createEmptyConversation(channelPath);
+    }
     this.update();
   }
 
