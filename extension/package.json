@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Render a folder of markdown files as a chat conversation",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
@@ -73,6 +73,16 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically open chat panel when opening a VibeChannel folder"
+        },
+        "vibechannel.syncInterval": {
+          "type": "number",
+          "default": 10,
+          "description": "Sync interval in seconds (how often to check for remote changes)"
+        },
+        "vibechannel.autoPush": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically push after sending a message"
         }
       }
     }
