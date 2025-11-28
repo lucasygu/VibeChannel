@@ -332,6 +332,9 @@ export class GitService {
 
     const { repoPath, branchName, worktreePath } = this.config;
 
+    // Prune stale worktree references (e.g., if repo was moved to a new path)
+    await execAsync('git worktree prune', { cwd: repoPath }).catch(() => {});
+
     const parentDir = path.dirname(worktreePath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });

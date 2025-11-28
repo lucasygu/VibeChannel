@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Render a folder of markdown files as a chat conversation",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
@@ -61,7 +61,10 @@
         "vibechannel.timestampDisplay": {
           "type": "string",
           "default": "relative",
-          "enum": ["relative", "absolute"],
+          "enum": [
+            "relative",
+            "absolute"
+          ],
           "description": "How to display message timestamps"
         },
         "vibechannel.watchForChanges": {
