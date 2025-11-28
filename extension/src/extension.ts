@@ -136,6 +136,31 @@ export function activate(context: vscode.ExtensionContext): void {
     showAccountCommand
   );
 
+  // Register webview panel serializer to restore panels after extension reload
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(ChatPanel.viewType, {
+      async deserializeWebviewPanel(panel: vscode.WebviewPanel, state: { repoPath?: string; currentChannel?: string }) {
+        console.log('VibeChannel: Restoring webview panel', state);
+
+        // Get workspace path - prefer saved state, fallback to current workspace
+        let repoPath = state?.repoPath;
+        if (!repoPath) {
+          const workspaceFolders = vscode.workspace.workspaceFolders;
+          if (workspaceFolders && workspaceFolders.length > 0) {
+            repoPath = workspaceFolders[0].uri.fsPath;
+          }
+        }
+
+        if (repoPath && isGitRepo(repoPath)) {
+          await ChatPanel.revive(panel, repoPath, state?.currentChannel);
+        } else {
+          // Can't restore - dispose the panel
+          panel.dispose();
+        }
+      },
+    })
+  );
+
   // Create status bar item for VibeChannel - always show it
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,

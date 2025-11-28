@@ -27,7 +27,7 @@ function createEmptyConversation(folderPath: string): Conversation {
  */
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
-  private static readonly viewType = 'vibechannelChat';
+  public static readonly viewType = 'vibechannelChat';
 
   private readonly panel: vscode.WebviewPanel;
   private readonly repoPath: string;
@@ -112,6 +112,66 @@ export class ChatPanel {
 
   public static isPanelVisible(): boolean {
     return ChatPanel.currentPanel?.panel.visible ?? false;
+  }
+
+  /**
+   * Revive an existing webview panel after extension reload
+   */
+  public static async revive(
+    panel: vscode.WebviewPanel,
+    repoPath: string,
+    savedChannel?: string
+  ): Promise<void> {
+    // Dispose any existing panel reference (shouldn't happen, but be safe)
+    if (ChatPanel.currentPanel) {
+      ChatPanel.currentPanel.dispose();
+    }
+
+    // Initialize GitService for this repo
+    const gitService = GitService.getInstance();
+    await gitService.initialize(repoPath);
+
+    // Initialize SyncService
+    const syncService = SyncService.getInstance();
+
+    // Get worktree path
+    const worktreePath = gitService.getWorktreePath();
+    if (!worktreePath) {
+      panel.dispose();
+      return;
+    }
+
+    // Update panel options for the new extension context
+    panel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.file(worktreePath)],
+    };
+
+    // Get channels and determine which one to show
+    const channels = ChatPanel.getChannelsFromWorktree(worktreePath);
+    let currentChannel = savedChannel;
+    if (!currentChannel || !channels.includes(currentChannel)) {
+      currentChannel = channels.includes('general') ? 'general' : channels[0] || 'general';
+    }
+
+    // Load conversation
+    const channelPath = path.join(worktreePath, currentChannel);
+    const conversation = fs.existsSync(channelPath)
+      ? loadConversation(channelPath)
+      : createEmptyConversation(channelPath);
+
+    // Create the ChatPanel instance with the existing panel
+    ChatPanel.currentPanel = new ChatPanel(
+      panel,
+      repoPath,
+      gitService,
+      syncService,
+      channels,
+      currentChannel,
+      conversation
+    );
+
+    console.log('VibeChannel: Panel revived successfully');
   }
 
   private constructor(
@@ -437,7 +497,7 @@ ${content}
   </div>
 
   <script>
-    ${this.getScript(!!user)}
+    ${this.getScript(!!user, this.repoPath, this.currentChannel)}
   </script>
 </body>
 </html>`;
@@ -1089,9 +1149,15 @@ ${content}
     `;
   }
 
-  private getScript(isSignedIn: boolean): string {
+  private getScript(isSignedIn: boolean, repoPath: string, currentChannel: string): string {
     return `
       const vscode = acquireVsCodeApi();
+
+      // Save state for panel restoration after extension reload
+      vscode.setState({
+        repoPath: ${JSON.stringify(repoPath)},
+        currentChannel: ${JSON.stringify(currentChannel)}
+      });
 
       // Signal ready
       vscode.postMessage({ type: 'ready' });
