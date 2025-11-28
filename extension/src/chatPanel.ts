@@ -10,6 +10,7 @@ import { marked } from 'marked';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
 import { GitService } from './gitService';
 import { SyncService } from './syncService';
+import { markMessagesAsRead } from './extension';
 
 function createEmptyConversation(folderPath: string): Conversation {
   return {
@@ -109,6 +110,10 @@ export class ChatPanel {
     }
   }
 
+  public static isPanelVisible(): boolean {
+    return ChatPanel.currentPanel?.panel.visible ?? false;
+  }
+
   private constructor(
     panel: vscode.WebviewPanel,
     repoPath: string,
@@ -128,6 +133,9 @@ export class ChatPanel {
 
     // Set initial content
     this.update();
+
+    // Mark messages as read since panel is now visible
+    markMessagesAsRead();
 
     // Start file watcher if enabled
     const config = vscode.workspace.getConfiguration('vibechannel');
@@ -162,6 +170,8 @@ export class ChatPanel {
       (e) => {
         if (e.webviewPanel.visible) {
           this.update();
+          // Mark messages as read when panel becomes visible
+          markMessagesAsRead();
         }
       },
       null,

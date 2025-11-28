@@ -91,7 +91,8 @@ export class SyncService implements vscode.Disposable {
       if (hasChanges) {
         const pulled = await this.gitService.pull();
         if (pulled) {
-          this._onSync.fire({ type: 'newMessages' });
+          const commitHash = this.gitService.getHeadCommit();
+          this._onSync.fire({ type: 'newMessages', data: { commitHash } });
         }
       }
 

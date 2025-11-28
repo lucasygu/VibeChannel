@@ -10,9 +10,14 @@ import { SyncService } from './syncService';
 let statusBarItem: vscode.StatusBarItem | undefined;
 let accountStatusBarItem: vscode.StatusBarItem | undefined;
 let authService: GitHubAuthService | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
+let hasUnread = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log('VibeChannel extension activated');
+
+  // Store context for use in helper functions
+  extensionContext = context;
 
   // Initialize auth service
   authService = GitHubAuthService.getInstance();
@@ -166,6 +171,9 @@ export function activate(context: vscode.ExtensionContext): void {
       updateStatusBar();
     })
   );
+
+  // Initialize unread state and listen for sync events
+  initializeUnreadState();
 }
 
 function isGitRepo(workspacePath: string): boolean {
@@ -183,6 +191,7 @@ function updateStatusBar(): void {
   }
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
+  const badge = hasUnread ? ' 🔵' : '';
 
   if (workspaceFolders && workspaceFolders.length > 0) {
     const workspacePath = workspaceFolders[0].uri.fsPath;
@@ -198,10 +207,12 @@ function updateStatusBar(): void {
             const fullPath = path.join(worktreePath, name);
             return fs.statSync(fullPath).isDirectory() && !name.startsWith('.');
           });
-        statusBarItem.text = `$(comment-discussion) VibeChannel (${channels.length})`;
-        statusBarItem.tooltip = `Open VibeChannel - ${channels.length} channel${channels.length !== 1 ? 's' : ''}`;
+        statusBarItem.text = `$(comment-discussion) VibeChannel (${channels.length})${badge}`;
+        statusBarItem.tooltip = hasUnread
+          ? `Open VibeChannel - New messages!`
+          : `Open VibeChannel - ${channels.length} channel${channels.length !== 1 ? 's' : ''}`;
       } else {
-        statusBarItem.text = '$(comment-discussion) VibeChannel';
+        statusBarItem.text = `$(comment-discussion) VibeChannel${badge}`;
         statusBarItem.tooltip = 'Initialize VibeChannel';
       }
     } else {
@@ -225,6 +236,73 @@ function updateAccountStatusBar(user: GitHubUser | null): void {
     accountStatusBarItem.tooltip = 'Sign in with GitHub';
     accountStatusBarItem.show();
   }
+}
+
+// === Unread Badge Logic ===
+
+function getLastSeenCommitKey(): string {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    return 'vibechannel.lastSeenCommit.default';
+  }
+  // Use workspace path as key to track per-workspace
+  const workspacePath = workspaceFolders[0].uri.fsPath;
+  return `vibechannel.lastSeenCommit.${workspacePath}`;
+}
+
+function getLastSeenCommit(): string | undefined {
+  if (!extensionContext) return undefined;
+  return extensionContext.globalState.get<string>(getLastSeenCommitKey());
+}
+
+function setLastSeenCommit(commitHash: string): void {
+  if (!extensionContext) return;
+  extensionContext.globalState.update(getLastSeenCommitKey(), commitHash);
+}
+
+function initializeUnreadState(): void {
+  const gitService = GitService.getInstance();
+  if (!gitService.isInitialized()) return;
+
+  const currentCommit = gitService.getHeadCommit();
+  const lastSeenCommit = getLastSeenCommit();
+
+  if (!currentCommit) return;
+
+  if (!lastSeenCommit) {
+    // First time - mark current as seen
+    setLastSeenCommit(currentCommit);
+    hasUnread = false;
+  } else if (currentCommit !== lastSeenCommit) {
+    // There are new commits since last seen
+    hasUnread = true;
+  }
+
+  updateStatusBar();
+
+  // Listen for sync events
+  const syncService = SyncService.getInstance();
+  extensionContext?.subscriptions.push(
+    syncService.onSync((event) => {
+      if (event.type === 'newMessages') {
+        // New messages pulled - check if panel is visible
+        if (!ChatPanel.isPanelVisible()) {
+          hasUnread = true;
+          updateStatusBar();
+        }
+      }
+    })
+  );
+}
+
+export function markMessagesAsRead(): void {
+  const gitService = GitService.getInstance();
+  const currentCommit = gitService.getHeadCommit();
+  if (currentCommit) {
+    setLastSeenCommit(currentCommit);
+  }
+  hasUnread = false;
+  updateStatusBar();
 }
 
 export function deactivate(): void {

@@ -570,6 +570,19 @@ Your message content here.
 `;
   }
 
+  getHeadCommit(): string | undefined {
+    if (!this.config?.worktreePath) return undefined;
+
+    try {
+      return execSync('git rev-parse HEAD', {
+        cwd: this.config.worktreePath,
+        encoding: 'utf-8',
+      }).trim();
+    } catch {
+      return undefined;
+    }
+  }
+
   dispose(): void {
     GitService.instance = undefined;
     this.initialized = false;

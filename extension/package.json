@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Render a folder of markdown files as a chat conversation",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
