@@ -335,12 +335,68 @@ export class GitService {
     // Prune stale worktree references (e.g., if repo was moved to a new path)
     await execAsync('git worktree prune', { cwd: repoPath }).catch(() => {});
 
+    // Check if branch is checked out at a different path (e.g., repo was moved but old worktree dir still exists)
+    await this.removeStaleWorktreeForBranch(branchName, worktreePath);
+
     const parentDir = path.dirname(worktreePath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
     }
 
     await execAsync(`git worktree add "${worktreePath}" ${branchName}`, { cwd: repoPath });
+  }
+
+  /**
+   * If the branch is checked out in a worktree at a different path than expected,
+   * remove that stale worktree (handles case where repo was moved but old worktree dir still exists).
+   */
+  private async removeStaleWorktreeForBranch(branchName: string, expectedPath: string): Promise<void> {
+    if (!this.config) return;
+
+    try {
+      const output = execSync('git worktree list --porcelain', {
+        cwd: this.config.repoPath,
+        encoding: 'utf-8',
+      });
+
+      // Parse porcelain output to find worktree for our branch
+      const worktrees = output.split('\n\n').filter(Boolean);
+      for (const entry of worktrees) {
+        const lines = entry.split('\n');
+        const worktreeLine = lines.find(l => l.startsWith('worktree '));
+        const branchLine = lines.find(l => l.startsWith('branch '));
+
+        if (!worktreeLine || !branchLine) continue;
+
+        const worktreePath = worktreeLine.replace('worktree ', '');
+        const branch = branchLine.replace('branch refs/heads/', '');
+
+        // Found our branch at a different path
+        if (branch === branchName && worktreePath !== expectedPath) {
+          console.log(`GitService: Branch '${branchName}' is checked out at stale path: ${worktreePath}`);
+          console.log(`GitService: Expected path: ${expectedPath}`);
+
+          // Try to remove via git first
+          try {
+            await execAsync(`git worktree remove "${worktreePath}" --force`, {
+              cwd: this.config.repoPath,
+            });
+            console.log('GitService: Removed stale worktree via git');
+          } catch {
+            // Git remove failed (corrupted state) - manually clean up
+            console.log('GitService: Git remove failed, cleaning up manually...');
+            if (fs.existsSync(worktreePath)) {
+              fs.rmSync(worktreePath, { recursive: true, force: true });
+            }
+            await execAsync('git worktree prune', { cwd: this.config.repoPath }).catch(() => {});
+            console.log('GitService: Manual cleanup complete');
+          }
+          break;
+        }
+      }
+    } catch (error) {
+      console.warn('GitService: Failed to check for stale worktrees:', error);
+    }
   }
 
   // === Channel and Message Operations ===
