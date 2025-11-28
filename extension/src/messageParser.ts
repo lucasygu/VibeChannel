@@ -173,13 +173,17 @@ export function sortMessages(
 }
 
 /**
- * Group messages by date (day)
+ * Group messages by date (day) using local time
  */
 export function groupMessagesByDate(messages: Message[]): Map<string, Message[]> {
   const groups = new Map<string, Message[]>();
 
   for (const message of messages) {
-    const dateKey = message.date.toISOString().split('T')[0]; // YYYY-MM-DD
+    // Use local date components instead of UTC (toISOString uses UTC)
+    const year = message.date.getFullYear();
+    const month = String(message.date.getMonth() + 1).padStart(2, '0');
+    const day = String(message.date.getDate()).padStart(2, '0');
+    const dateKey = `${year}-${month}-${day}`; // YYYY-MM-DD in local time
 
     if (!groups.has(dateKey)) {
       groups.set(dateKey, []);

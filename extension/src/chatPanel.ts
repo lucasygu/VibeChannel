@@ -608,15 +608,25 @@ ${content}
   }
 
   private formatDateSeparator(dateStr: string): string {
-    const date = new Date(dateStr);
+    // Parse YYYY-MM-DD as local date (not UTC)
+    // new Date("YYYY-MM-DD") parses as UTC, which can shift days in local time
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day); // month is 0-indexed
+
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    if (date.toDateString() === today.toDateString()) {
+    // Compare just the date parts (year, month, day) in local time
+    const isSameDay = (d1: Date, d2: Date) =>
+      d1.getFullYear() === d2.getFullYear() &&
+      d1.getMonth() === d2.getMonth() &&
+      d1.getDate() === d2.getDate();
+
+    if (isSameDay(date, today)) {
       return 'Today';
     }
-    if (date.toDateString() === yesterday.toDateString()) {
+    if (isSameDay(date, yesterday)) {
       return 'Yesterday';
     }
 
