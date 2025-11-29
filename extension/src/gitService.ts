@@ -7,6 +7,7 @@ const execAsync = promisify(exec);
 
 export const VIBECHANNEL_BRANCH = 'vibechannel';
 export const WORKTREE_DIR = 'vibechannel-worktree';
+export const ASSETS_DIR = '.assets';
 
 export interface GitServiceConfig {
   repoPath: string;
@@ -300,6 +301,11 @@ export class GitService {
     const generalDir = path.join(worktreePath, 'general');
     fs.mkdirSync(generalDir, { recursive: true });
     fs.writeFileSync(path.join(generalDir, '.gitkeep'), '');
+
+    // Create .assets folder for pasted images
+    const assetsDir = path.join(worktreePath, ASSETS_DIR);
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(assetsDir, '.gitkeep'), '');
     fs.writeFileSync(
       path.join(worktreePath, 'README.md'),
       '# VibeChannel Data\n\nThis branch contains VibeChannel conversation data.\n'
@@ -436,6 +442,56 @@ export class GitService {
     const filePath = path.join(channelPath, filename);
     fs.writeFileSync(filePath, content, 'utf-8');
     await this.commitChanges(`Message in #${channel}`);
+  }
+
+  /**
+   * Ensure the .assets directory exists for storing pasted images
+   */
+  ensureAssetsDir(): string | undefined {
+    if (!this.config?.worktreePath) return undefined;
+
+    const assetsDir = path.join(this.config.worktreePath, ASSETS_DIR);
+    if (!fs.existsSync(assetsDir)) {
+      fs.mkdirSync(assetsDir, { recursive: true });
+    }
+    return assetsDir;
+  }
+
+  /**
+   * Save a file to the .assets directory
+   * @param data Base64-encoded file data (without data URI prefix)
+   * @param extension File extension (e.g., 'png', 'jpg', 'pdf', 'zip')
+   * @returns The relative path to the saved file (e.g., '.assets/20250115T103045-a3f8c2.png')
+   */
+  saveAsset(data: string, extension: string): string | undefined {
+    const assetsDir = this.ensureAssetsDir();
+    if (!assetsDir) return undefined;
+
+    // Generate filename: {timestamp}-{randomId}.{ext}
+    const now = new Date();
+    const timestamp = now.toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, '')
+      .replace('T', 'T');
+
+    const randomId = Array.from({ length: 6 }, () =>
+      '0123456789abcdef'[Math.floor(Math.random() * 16)]
+    ).join('');
+
+    const filename = `${timestamp}-${randomId}.${extension}`;
+    const filepath = path.join(assetsDir, filename);
+
+    // Decode base64 and write to file
+    const buffer = Buffer.from(data, 'base64');
+    fs.writeFileSync(filepath, buffer);
+
+    // Return path relative to worktree root
+    return `${ASSETS_DIR}/${filename}`;
+  }
+
+  getAssetsPath(): string | undefined {
+    if (!this.config?.worktreePath) return undefined;
+    return path.join(this.config.worktreePath, ASSETS_DIR);
   }
 
   async commitChanges(message: string): Promise<void> {

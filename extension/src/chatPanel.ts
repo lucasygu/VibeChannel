@@ -317,12 +317,23 @@ export class ChatPanel {
         }
         break;
       case 'openRepoFile':
-        // Open a file from the repo (for attachments)
+        // Open a file from the repo (for @ file references)
         if (typeof message.payload === 'string') {
           const filepath = path.join(this.repoPath, message.payload);
           vscode.workspace.openTextDocument(filepath).then((doc) => {
             vscode.window.showTextDocument(doc);
           });
+        }
+        break;
+      case 'openAsset':
+        // Open an asset file from the worktree (for attachments)
+        if (typeof message.payload === 'string') {
+          const worktreePath = this.gitService.getWorktreePath();
+          if (worktreePath) {
+            const filepath = path.join(worktreePath, message.payload);
+            // Use vscode.env.openExternal for non-text files
+            vscode.env.openExternal(vscode.Uri.file(filepath));
+          }
         }
         break;
       case 'signIn':
@@ -337,11 +348,33 @@ export class ChatPanel {
           this.panel.webview.postMessage({ type: 'repoFiles', payload: files });
         });
         break;
+      case 'saveAsset':
+        // Save pasted file to .assets folder
+        if (message.payload && typeof message.payload === 'object') {
+          const { data, extension, isImage } = message.payload as { data: string; extension: string; isImage: boolean };
+          if (data && extension) {
+            const assetPath = this.gitService.saveAsset(data, extension);
+            if (assetPath) {
+              this.panel.webview.postMessage({ type: 'assetSaved', payload: { path: assetPath, isImage } });
+            }
+          }
+        }
+        break;
       case 'sendMessage':
         if (message.payload && typeof message.payload === 'object') {
-          const { content, attachments } = message.payload as { content: string; attachments?: string[] };
-          if (content && content.trim()) {
-            this.createMessageFile(content.trim(), attachments);
+          const { content, files, images, attachments } = message.payload as {
+            content: string;
+            files?: string[];
+            images?: string[];
+            attachments?: string[];
+          };
+          const hasContent = content && content.trim();
+          const hasFiles = files && files.length > 0;
+          const hasImages = images && images.length > 0;
+          const hasAttachments = attachments && attachments.length > 0;
+          // Allow messages with text, files, images, or attachments (any combination)
+          if (hasContent || hasFiles || hasImages || hasAttachments) {
+            this.createMessageFile(content?.trim() || '', files, images, attachments);
           }
         } else if (typeof message.payload === 'string' && message.payload.trim()) {
           // Backwards compatibility
@@ -402,7 +435,7 @@ export class ChatPanel {
     }
   }
 
-  private async createMessageFile(content: string, attachments?: string[]): Promise<void> {
+  private async createMessageFile(content: string, files?: string[], images?: string[], attachments?: string[]): Promise<void> {
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
 
@@ -443,6 +476,22 @@ export class ChatPanel {
       let frontmatter = `---
 from: ${sender}
 date: ${isoTimestamp}`;
+
+      // Add file references if present
+      if (files && files.length > 0) {
+        frontmatter += `\nfiles:`;
+        for (const file of files) {
+          frontmatter += `\n  - ${file}`;
+        }
+      }
+
+      // Add images if present
+      if (images && images.length > 0) {
+        frontmatter += `\nimages:`;
+        for (const image of images) {
+          frontmatter += `\n  - ${image}`;
+        }
+      }
 
       // Add attachments if present
       if (attachments && attachments.length > 0) {
@@ -498,13 +547,14 @@ date: ${isoTimestamp}`;
     const timestampDisplay = config.get('timestampDisplay', 'relative');
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
+    const cspSource = this.panel.webview.cspSource;
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https: ${cspSource} data:;">
   <title>VibeChannel</title>
   <style>
     ${this.getStyles()}
@@ -628,20 +678,59 @@ date: ${isoTimestamp}`;
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
         ${message.replyTo ? `<span class="reply-indicator" title="Reply to ${this.escapeHtml(message.replyTo)}">↩</span>` : ''}
       </div>
-      ${message.attachments && message.attachments.length > 0 ? this.renderAttachments(message.attachments) : ''}
+      ${message.files && message.files.length > 0 ? this.renderFiles(message.files) : ''}
+      ${message.images && message.images.length > 0 ? this.renderImages(message.images) : ''}
       <div class="message-content">${renderedContent}</div>
+      ${message.attachments && message.attachments.length > 0 ? this.renderAttachments(message.attachments) : ''}
       ${message.tags && message.tags.length > 0 ? this.renderTags(message.tags) : ''}
     </div>`;
   }
 
-  private renderAttachments(attachments: string[]): string {
-    return `<div class="message-attachments">
-      ${attachments.map((file) => `<span class="attachment-chip" data-file="${this.escapeHtml(file)}" title="Click to open ${this.escapeHtml(file)}">
-        <svg viewBox="0 0 16 16" width="12" height="12" class="attachment-icon">
+  private renderFiles(files: string[]): string {
+    return `<div class="message-files">
+      ${files.map((file) => `<span class="file-chip" data-file="${this.escapeHtml(file)}" title="Click to open ${this.escapeHtml(file)}">
+        <svg viewBox="0 0 16 16" width="12" height="12" class="file-icon">
           <path fill="currentColor" d="M3.5 1.5v13h9v-9l-4-4h-5zm1 1h3.5v3.5h3.5v7.5h-7v-11zm4.5.71l2.29 2.29h-2.29v-2.29z"/>
         </svg>
         ${this.escapeHtml(path.basename(file))}
       </span>`).join('')}
+    </div>`;
+  }
+
+  private renderImages(images: string[]): string {
+    const worktreePath = this.gitService.getWorktreePath();
+    if (!worktreePath) return '';
+
+    return `<div class="message-images">
+      ${images.map((imagePath) => {
+        // Convert relative path to absolute path in worktree
+        const absolutePath = path.join(worktreePath, imagePath);
+        // Convert to webview URI
+        const imageUri = this.panel.webview.asWebviewUri(vscode.Uri.file(absolutePath));
+        return `<div class="message-image-container" data-image="${this.escapeHtml(imagePath)}">
+          <img class="message-image" src="${imageUri}" alt="${this.escapeHtml(path.basename(imagePath))}" />
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  private renderAttachments(attachments: string[]): string {
+    const worktreePath = this.gitService.getWorktreePath();
+    if (!worktreePath) return '';
+
+    return `<div class="message-attachments">
+      ${attachments.map((attachmentPath) => {
+        const filename = path.basename(attachmentPath);
+        const ext = path.extname(filename).toLowerCase().slice(1) || 'file';
+        return `<div class="attachment-link" data-attachment="${this.escapeHtml(attachmentPath)}" title="Click to open ${this.escapeHtml(filename)}">
+          <svg viewBox="0 0 16 16" width="16" height="16" class="attachment-icon">
+            <path fill="currentColor" d="M13.5 1h-11l-.5.5v13l.5.5h11l.5-.5v-13l-.5-.5zm-.5 13H3V2h10v12z"/>
+            <path fill="currentColor" d="M4 4h8v1H4V4zm0 3h8v1H4V7zm0 3h5v1H4v-1z"/>
+          </svg>
+          <span class="attachment-name">${this.escapeHtml(filename)}</span>
+          <span class="attachment-ext">${ext.toUpperCase()}</span>
+        </div>`;
+      }).join('')}
     </div>`;
   }
 
@@ -668,14 +757,18 @@ date: ${isoTimestamp}`;
 
   private renderInputField(user: GitHubUser): string {
     return `<div class="input-wrapper">
-      <div class="attachments-chips" id="attachmentsChips"></div>
+      <div class="chips-container">
+        <div class="files-chips" id="filesChips"></div>
+        <div class="images-chips" id="imagesChips"></div>
+        <div class="attachments-chips" id="attachmentsChips"></div>
+      </div>
       <div class="input-container">
         <img class="input-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
         <div class="input-with-autocomplete">
           <textarea
             id="messageInput"
             class="message-input"
-            placeholder="Message #${this.escapeHtml(this.currentChannel)} (type @ to attach files)"
+            placeholder="Message #${this.escapeHtml(this.currentChannel)} (@ files, Cmd+V images)"
             rows="1"
           ></textarea>
           <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
@@ -1220,7 +1313,7 @@ date: ${isoTimestamp}`;
         background-color: var(--vscode-button-hoverBackground, #1177bb);
       }
 
-      /* Input wrapper for attachments + input */
+      /* Input wrapper for files + images + input */
       .input-wrapper {
         display: flex;
         flex-direction: column;
@@ -1232,18 +1325,33 @@ date: ${isoTimestamp}`;
         position: relative;
       }
 
-      /* Attachment chips in input area */
-      .attachments-chips {
+      /* Chips container for files and images */
+      .chips-container {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .chips-container:empty,
+      .chips-container:not(:has(*:not(:empty))) {
+        display: none;
+      }
+
+      /* File and image chips in input area */
+      .files-chips,
+      .images-chips {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
       }
 
-      .attachments-chips:empty {
+      .files-chips:empty,
+      .images-chips:empty {
         display: none;
       }
 
-      .attachment-input-chip {
+      .file-input-chip,
+      .image-input-chip {
         display: inline-flex;
         align-items: center;
         gap: 4px;
@@ -1254,14 +1362,24 @@ date: ${isoTimestamp}`;
         font-size: 0.8em;
       }
 
-      .attachment-input-chip .remove-chip {
+      .file-input-chip .remove-chip,
+      .image-input-chip .remove-chip {
         cursor: pointer;
         opacity: 0.7;
         margin-left: 2px;
       }
 
-      .attachment-input-chip .remove-chip:hover {
+      .file-input-chip .remove-chip:hover,
+      .image-input-chip .remove-chip:hover {
         opacity: 1;
+      }
+
+      /* Image thumbnail preview */
+      .image-input-chip .image-thumbnail {
+        width: 20px;
+        height: 20px;
+        object-fit: cover;
+        border-radius: 2px;
       }
 
       /* Autocomplete dropdown */
@@ -1315,15 +1433,15 @@ date: ${isoTimestamp}`;
         font-size: 0.9em;
       }
 
-      /* Message attachments display */
-      .message-attachments {
+      /* Message file references display */
+      .message-files {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
         margin-bottom: 8px;
       }
 
-      .attachment-chip {
+      .file-chip {
         display: inline-flex;
         align-items: center;
         gap: 4px;
@@ -1336,12 +1454,114 @@ date: ${isoTimestamp}`;
         border: 1px solid var(--vscode-panel-border, #454545);
       }
 
-      .attachment-chip:hover {
+      .file-chip:hover {
         background-color: var(--vscode-list-hoverBackground, #2a2d2e);
+      }
+
+      .file-icon {
+        opacity: 0.7;
+      }
+
+      /* Message images display */
+      .message-images {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .message-image-container {
+        max-width: 400px;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid var(--vscode-panel-border, #454545);
+        cursor: pointer;
+      }
+
+      .message-image {
+        display: block;
+        max-width: 100%;
+        height: auto;
+      }
+
+      .message-image-container:hover {
+        border-color: var(--vscode-focusBorder, #007fd4);
+      }
+
+      /* Message attachments (non-image files) */
+      .message-attachments {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .attachment-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        background-color: var(--vscode-textBlockQuote-background, #2d2d2d);
+        border: 1px solid var(--vscode-panel-border, #454545);
+        cursor: pointer;
+        max-width: fit-content;
+      }
+
+      .attachment-link:hover {
+        background-color: var(--vscode-list-hoverBackground, #2a2d2e);
+        border-color: var(--vscode-focusBorder, #007fd4);
       }
 
       .attachment-icon {
         opacity: 0.7;
+        flex-shrink: 0;
+      }
+
+      .attachment-name {
+        color: var(--vscode-textLink-foreground, #3794ff);
+        font-size: 0.9em;
+      }
+
+      .attachment-ext {
+        font-size: 0.7em;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background-color: var(--vscode-badge-background, #4d4d4d);
+        color: var(--vscode-badge-foreground, #ffffff);
+        margin-left: auto;
+      }
+
+      /* Attachment chips in input area */
+      .attachments-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .attachments-chips:empty {
+        display: none;
+      }
+
+      .attachment-input-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        background-color: var(--vscode-badge-background, #4d4d4d);
+        color: var(--vscode-badge-foreground, #ffffff);
+        font-size: 0.8em;
+      }
+
+      .attachment-input-chip .remove-chip {
+        cursor: pointer;
+        opacity: 0.7;
+        margin-left: 2px;
+      }
+
+      .attachment-input-chip .remove-chip:hover {
+        opacity: 1;
       }
     `;
   }
@@ -1409,8 +1629,8 @@ date: ${isoTimestamp}`;
         });
       }
 
-      // Handle attachment clicks in messages
-      document.querySelectorAll('.attachment-chip').forEach(el => {
+      // Handle file reference clicks in messages
+      document.querySelectorAll('.file-chip').forEach(el => {
         el.addEventListener('click', () => {
           const file = el.getAttribute('data-file');
           if (file) {
@@ -1419,15 +1639,29 @@ date: ${isoTimestamp}`;
         });
       });
 
+      // Handle attachment link clicks in messages
+      document.querySelectorAll('.attachment-link').forEach(el => {
+        el.addEventListener('click', () => {
+          const attachment = el.getAttribute('data-attachment');
+          if (attachment) {
+            vscode.postMessage({ type: 'openAsset', payload: attachment });
+          }
+        });
+      });
+
       ${isSignedIn ? `
-      // Message input handling with @ file attachments
+      // Message input handling with @ file references, image paste, and file paste
       const messageInput = document.getElementById('messageInput');
       const sendBtn = document.getElementById('sendBtn');
       const autocompleteDropdown = document.getElementById('autocompleteDropdown');
+      const filesChips = document.getElementById('filesChips');
+      const imagesChips = document.getElementById('imagesChips');
       const attachmentsChips = document.getElementById('attachmentsChips');
 
       let repoFiles = [];
-      let selectedAttachments = [];
+      let selectedFiles = [];       // Array of file paths (@ references to codebase)
+      let selectedImages = [];      // Array of { path: string, dataUrl: string } for images
+      let selectedAttachments = []; // Array of { path: string, name: string } for non-image files
       let autocompleteVisible = false;
       let selectedIndex = 0;
       let searchStart = -1;
@@ -1435,34 +1669,58 @@ date: ${isoTimestamp}`;
       // Request repo files on load
       vscode.postMessage({ type: 'getRepoFiles' });
 
-      // Listen for repo files response
+      // Listen for messages from extension
       window.addEventListener('message', (event) => {
         const message = event.data;
         if (message.type === 'repoFiles') {
           repoFiles = message.payload || [];
+        } else if (message.type === 'assetSaved') {
+          // Asset was saved, update the appropriate list
+          const { path, isImage } = message.payload;
+          if (isImage) {
+            const pendingImage = selectedImages.find(img => !img.path);
+            if (pendingImage) {
+              pendingImage.path = path;
+              renderImageChips();
+            }
+          } else {
+            const pendingAttachment = selectedAttachments.find(att => !att.path);
+            if (pendingAttachment) {
+              pendingAttachment.path = path;
+              renderAttachmentChips();
+            }
+          }
         }
       });
 
       function sendMessage() {
         const content = messageInput.value.trim();
-        if (content || selectedAttachments.length > 0) {
+        const imagePaths = selectedImages.filter(img => img.path).map(img => img.path);
+        const attachmentPaths = selectedAttachments.filter(att => att.path).map(att => att.path);
+        if (content || selectedFiles.length > 0 || imagePaths.length > 0 || attachmentPaths.length > 0) {
           vscode.postMessage({
             type: 'sendMessage',
             payload: {
               content: content,
-              attachments: selectedAttachments.length > 0 ? [...selectedAttachments] : undefined
+              files: selectedFiles.length > 0 ? [...selectedFiles] : undefined,
+              images: imagePaths.length > 0 ? imagePaths : undefined,
+              attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined
             }
           });
           messageInput.value = '';
           messageInput.style.height = 'auto';
+          selectedFiles = [];
+          selectedImages = [];
           selectedAttachments = [];
-          renderChips();
+          renderFileChips();
+          renderImageChips();
+          renderAttachmentChips();
         }
       }
 
-      function renderChips() {
-        attachmentsChips.innerHTML = selectedAttachments.map((file, i) =>
-          '<span class="attachment-input-chip" data-index="' + i + '">' +
+      function renderFileChips() {
+        filesChips.innerHTML = selectedFiles.map((file, i) =>
+          '<span class="file-input-chip" data-index="' + i + '">' +
             '<svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M3.5 1.5v13h9v-9l-4-4h-5zm1 1h3.5v3.5h3.5v7.5h-7v-11zm4.5.71l2.29 2.29h-2.29v-2.29z"/></svg>' +
             file.split('/').pop() +
             '<span class="remove-chip" data-index="' + i + '">×</span>' +
@@ -1470,20 +1728,161 @@ date: ${isoTimestamp}`;
         ).join('');
 
         // Add click handlers for remove buttons
+        filesChips.querySelectorAll('.remove-chip').forEach(el => {
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = parseInt(el.getAttribute('data-index'));
+            selectedFiles.splice(idx, 1);
+            renderFileChips();
+          });
+        });
+      }
+
+      function renderImageChips() {
+        imagesChips.innerHTML = selectedImages.map((img, i) => {
+          const filename = img.path ? img.path.split('/').pop() : 'Uploading...';
+          return '<span class="image-input-chip" data-index="' + i + '">' +
+            '<img class="image-thumbnail" src="' + img.dataUrl + '" alt="preview" />' +
+            filename +
+            '<span class="remove-chip" data-index="' + i + '">×</span>' +
+          '</span>';
+        }).join('');
+
+        // Add click handlers for remove buttons
+        imagesChips.querySelectorAll('.remove-chip').forEach(el => {
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = parseInt(el.getAttribute('data-index'));
+            selectedImages.splice(idx, 1);
+            renderImageChips();
+          });
+        });
+      }
+
+      function renderAttachmentChips() {
+        attachmentsChips.innerHTML = selectedAttachments.map((att, i) => {
+          const filename = att.name || (att.path ? att.path.split('/').pop() : 'Uploading...');
+          return '<span class="attachment-input-chip" data-index="' + i + '">' +
+            '<svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M13.5 1h-11l-.5.5v13l.5.5h11l.5-.5v-13l-.5-.5zm-.5 13H3V2h10v12z"/></svg>' +
+            filename +
+            '<span class="remove-chip" data-index="' + i + '">×</span>' +
+          '</span>';
+        }).join('');
+
+        // Add click handlers for remove buttons
         attachmentsChips.querySelectorAll('.remove-chip').forEach(el => {
           el.addEventListener('click', (e) => {
             e.stopPropagation();
             const idx = parseInt(el.getAttribute('data-index'));
             selectedAttachments.splice(idx, 1);
-            renderChips();
+            renderAttachmentChips();
           });
         });
       }
 
+      // Helper to process an image file
+      function processImageFile(file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result;
+          if (typeof dataUrl !== 'string') return;
+
+          // Extract base64 data and extension
+          const matches = dataUrl.match(/^data:image\\/(\\w+);base64,(.+)$/);
+          if (!matches) return;
+
+          const extension = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+          const base64Data = matches[2];
+
+          // Add to selectedImages with dataUrl for preview (path will be set when saved)
+          selectedImages.push({ path: '', dataUrl: dataUrl });
+          renderImageChips();
+
+          // Send to extension to save
+          vscode.postMessage({
+            type: 'saveAsset',
+            payload: { data: base64Data, extension: extension, isImage: true }
+          });
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // Helper to process a non-image file
+      function processFile(file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result;
+          if (typeof dataUrl !== 'string') return;
+
+          // Extract base64 data
+          const matches = dataUrl.match(/^data:[^;]*;base64,(.+)$/);
+          if (!matches) return;
+
+          const base64Data = matches[1];
+          const extension = file.name?.split('.').pop()?.toLowerCase() || 'bin';
+
+          // Add to selectedAttachments (path will be set when saved)
+          selectedAttachments.push({ path: '', name: file.name || 'file.' + extension });
+          renderAttachmentChips();
+
+          // Send to extension to save
+          vscode.postMessage({
+            type: 'saveAsset',
+            payload: { data: base64Data, extension: extension, isImage: false }
+          });
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // Check if a file is an image based on type or extension
+      function isImageFile(file) {
+        if (file.type && file.type.startsWith('image/')) return true;
+        const ext = file.name?.toLowerCase().split('.').pop();
+        return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext);
+      }
+
+      // Handle paste event for files (images and other file types)
+      document.addEventListener('paste', (e) => {
+        const clipboardData = e.clipboardData;
+        if (!clipboardData) return;
+
+        let handled = false;
+
+        // Case 1: Check for image data in items (from "Copy Image" or screenshots)
+        const items = clipboardData.items;
+        if (items) {
+          for (const item of items) {
+            if (item.type.startsWith('image/')) {
+              e.preventDefault();
+              const file = item.getAsFile();
+              if (file) {
+                processImageFile(file);
+                handled = true;
+                break;
+              }
+            }
+          }
+        }
+
+        // Case 2: Check for copied files (from Finder/Explorer file copy)
+        if (!handled && clipboardData.files && clipboardData.files.length > 0) {
+          for (const file of clipboardData.files) {
+            e.preventDefault();
+            if (isImageFile(file)) {
+              processImageFile(file);
+            } else {
+              processFile(file);
+            }
+            handled = true;
+            break;  // Only handle first file
+          }
+        }
+      });
+
       function showAutocomplete(query) {
         const filtered = repoFiles
           .filter(f => f.toLowerCase().includes(query.toLowerCase()))
-          .filter(f => !selectedAttachments.includes(f))
+          .filter(f => !selectedFiles.includes(f))
           .slice(0, 10);
 
         if (filtered.length === 0) {
@@ -1520,9 +1919,9 @@ date: ${isoTimestamp}`;
       }
 
       function selectFile(file) {
-        if (file && !selectedAttachments.includes(file)) {
-          selectedAttachments.push(file);
-          renderChips();
+        if (file && !selectedFiles.includes(file)) {
+          selectedFiles.push(file);
+          renderFileChips();
         }
         // Remove the @query from the input
         if (searchStart >= 0) {

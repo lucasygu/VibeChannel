@@ -9,7 +9,9 @@ export interface Message {
   date: Date;
   replyTo?: string;
   tags?: string[];
-  attachments?: string[];  // File paths relative to repo root
+  files?: string[];        // Referenced file paths relative to repo root (via @ tagging)
+  images?: string[];       // Attached images stored in worktree .assets/ folder
+  attachments?: string[];  // Attached non-image files stored in worktree .assets/ folder
   edited?: Date;
   content: string;
   rawContent: string;
@@ -73,7 +75,29 @@ export function parseMessage(filepath: string): Message | ParseError {
       }
     }
 
-    // Parse attachments (file references)
+    // Parse files (referenced codebase files via @ tagging)
+    let files: string[] | undefined;
+    if (frontmatter.files) {
+      if (Array.isArray(frontmatter.files)) {
+        files = frontmatter.files.map(String);
+      } else if (typeof frontmatter.files === 'string') {
+        // Handle single file or comma-separated
+        files = frontmatter.files.split(',').map((f: string) => f.trim());
+      }
+    }
+
+    // Parse images (pasted images stored in .assets/)
+    let images: string[] | undefined;
+    if (frontmatter.images) {
+      if (Array.isArray(frontmatter.images)) {
+        images = frontmatter.images.map(String);
+      } else if (typeof frontmatter.images === 'string') {
+        // Handle single image or comma-separated
+        images = frontmatter.images.split(',').map((i: string) => i.trim());
+      }
+    }
+
+    // Parse attachments (pasted non-image files stored in .assets/)
     let attachments: string[] | undefined;
     if (frontmatter.attachments) {
       if (Array.isArray(frontmatter.attachments)) {
@@ -91,6 +115,8 @@ export function parseMessage(filepath: string): Message | ParseError {
       date,
       replyTo: frontmatter.reply_to ? String(frontmatter.reply_to) : undefined,
       tags,
+      files,
+      images,
       attachments,
       edited,
       content: content.trim(),
