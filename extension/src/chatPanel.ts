@@ -381,6 +381,11 @@ export class ChatPanel {
           this.createMessageFile(message.payload.trim());
         }
         break;
+      case 'deleteMessage':
+        if (typeof message.payload === 'string') {
+          this.deleteMessageFile(message.payload);
+        }
+        break;
     }
   }
 
@@ -521,6 +526,46 @@ date: ${isoTimestamp}`;
     }
   }
 
+  private async deleteMessageFile(filename: string): Promise<void> {
+    const authService = GitHubAuthService.getInstance();
+    const user = authService.getUser();
+
+    if (!user) {
+      vscode.window.showErrorMessage('You must be signed in to delete messages');
+      return;
+    }
+
+    try {
+      const channelPath = this.getCurrentChannelPath();
+      if (!channelPath) {
+        vscode.window.showErrorMessage('Channel path not available');
+        return;
+      }
+
+      const filepath = path.join(channelPath, filename);
+
+      // Verify file exists
+      if (!fs.existsSync(filepath)) {
+        vscode.window.showErrorMessage('Message file not found');
+        return;
+      }
+
+      // Delete the file
+      fs.unlinkSync(filepath);
+
+      // Commit the deletion using GitService
+      const sender = user.login.toLowerCase();
+      await this.gitService.commitChanges(`Delete message by ${sender}`);
+
+      // Queue push via sync service
+      await this.syncService.queuePush();
+
+      // The file watcher will pick up the deletion and refresh the view
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to delete message: ${error}`);
+    }
+  }
+
   public refresh(): void {
     // Refresh channels list from worktree
     const worktreePath = this.gitService.getWorktreePath();
@@ -600,8 +645,31 @@ date: ${isoTimestamp}`;
     </main>
   </div>
 
+  <!-- Custom context menu for messages -->
+  <div class="context-menu" id="contextMenu">
+    <div class="context-menu-item" id="contextCopy">
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path fill="currentColor" d="M4 4h8v8H4V4zm1 1v6h6V5H5zm-3-3v10h2V3H3V2h2V1H2v1H1v11h11v-1h1V2h-1V1H3v1H2z"/>
+      </svg>
+      <span>Copy</span>
+    </div>
+    <div class="context-menu-item" id="contextOpenFile">
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path fill="currentColor" d="M3.5 1.5v13h9v-9l-4-4h-5zm1 1h3.5v3.5h3.5v7.5h-7v-11zm4.5.71l2.29 2.29h-2.29v-2.29z"/>
+      </svg>
+      <span>Open Source File</span>
+    </div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item context-menu-danger" id="contextDelete">
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path fill="currentColor" d="M5.5 5.5v7h1v-7h-1zm4 0v7h1v-7h-1zm-5-4v1H2v1h1v10.5l.5.5h9l.5-.5V3.5h1v-1h-2.5v-1h-6zm1 1h4v1h-4v-1zM4 3.5h8V13H4V3.5z"/>
+      </svg>
+      <span>Delete Message</span>
+    </div>
+  </div>
+
   <script>
-    ${this.getScript(!!user, this.repoPath, this.currentChannel)}
+    ${this.getScript(!!user, user?.login.toLowerCase() || '', this.repoPath, this.currentChannel)}
   </script>
 </body>
 </html>`;
@@ -672,7 +740,7 @@ date: ${isoTimestamp}`;
     const renderedContent = this.renderMarkdown(message.content);
     const colorClass = this.getSenderColorClass(message.from);
 
-    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}">
+    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}">
       <div class="message-header">
         <span class="sender">${this.escapeHtml(message.from)}</span>
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
@@ -1563,12 +1631,73 @@ date: ${isoTimestamp}`;
       .attachment-input-chip .remove-chip:hover {
         opacity: 1;
       }
+
+      /* Custom context menu */
+      .context-menu {
+        position: fixed;
+        display: none;
+        min-width: 180px;
+        background-color: var(--vscode-menu-background, #252526);
+        border: 1px solid var(--vscode-menu-border, #454545);
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 10000;
+        padding: 4px 0;
+        font-size: 0.9em;
+      }
+
+      .context-menu.visible {
+        display: block;
+      }
+
+      .context-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        cursor: pointer;
+        color: var(--vscode-menu-foreground, #cccccc);
+      }
+
+      .context-menu-item:hover {
+        background-color: var(--vscode-menu-selectionBackground, #094771);
+        color: var(--vscode-menu-selectionForeground, #ffffff);
+      }
+
+      .context-menu-item svg {
+        flex-shrink: 0;
+        opacity: 0.8;
+      }
+
+      .context-menu-item:hover svg {
+        opacity: 1;
+      }
+
+      .context-menu-separator {
+        height: 1px;
+        background-color: var(--vscode-menu-separatorBackground, #454545);
+        margin: 4px 0;
+      }
+
+      .context-menu-danger {
+        color: var(--vscode-errorForeground, #f48771);
+      }
+
+      .context-menu-danger:hover {
+        background-color: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+        color: var(--vscode-errorForeground, #f48771);
+      }
+
+      .context-menu-item.hidden {
+        display: none;
+      }
     `;
   }
 
-  private getScript(isSignedIn: boolean, repoPath: string, currentChannel: string): string {
+  private getScript(isSignedIn: boolean, currentUser: string, repoPath: string, currentChannel: string): string {
     return `
       const vscode = acquireVsCodeApi();
+      const currentUser = ${JSON.stringify(currentUser)};
 
       // Save state for panel restoration after extension reload
       vscode.setState({
@@ -1578,6 +1707,105 @@ date: ${isoTimestamp}`;
 
       // Signal ready
       vscode.postMessage({ type: 'ready' });
+
+      // Context menu handling
+      const contextMenu = document.getElementById('contextMenu');
+      const contextCopy = document.getElementById('contextCopy');
+      const contextOpenFile = document.getElementById('contextOpenFile');
+      const contextDelete = document.getElementById('contextDelete');
+      let contextTargetMessage = null;
+
+      function showContextMenu(x, y, messageEl) {
+        contextTargetMessage = messageEl;
+        const sender = messageEl.getAttribute('data-sender');
+        const isOwner = currentUser && sender === currentUser;
+
+        // Show/hide delete option based on ownership
+        if (isOwner) {
+          contextDelete.classList.remove('hidden');
+        } else {
+          contextDelete.classList.add('hidden');
+        }
+
+        // Position the menu
+        contextMenu.style.left = x + 'px';
+        contextMenu.style.top = y + 'px';
+        contextMenu.classList.add('visible');
+
+        // Adjust position if menu goes off screen
+        const rect = contextMenu.getBoundingClientRect();
+        if (rect.right > window.innerWidth) {
+          contextMenu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+        }
+        if (rect.bottom > window.innerHeight) {
+          contextMenu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+        }
+      }
+
+      function hideContextMenu() {
+        contextMenu.classList.remove('visible');
+        contextTargetMessage = null;
+      }
+
+      // Hide context menu when clicking elsewhere
+      document.addEventListener('click', (e) => {
+        if (!contextMenu.contains(e.target)) {
+          hideContextMenu();
+        }
+      });
+
+      // Hide on escape key
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          hideContextMenu();
+        }
+      });
+
+      // Handle right-click on messages
+      document.querySelectorAll('.message').forEach(messageEl => {
+        messageEl.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          showContextMenu(e.clientX, e.clientY, messageEl);
+        });
+      });
+
+      // Context menu actions
+      contextCopy.addEventListener('click', () => {
+        if (contextTargetMessage) {
+          const content = contextTargetMessage.querySelector('.message-content');
+          if (content) {
+            // Get text content, stripping HTML
+            const text = content.innerText || content.textContent;
+            navigator.clipboard.writeText(text).then(() => {
+              // Could show a toast here
+            }).catch(err => {
+              console.error('Failed to copy:', err);
+            });
+          }
+        }
+        hideContextMenu();
+      });
+
+      contextOpenFile.addEventListener('click', () => {
+        if (contextTargetMessage) {
+          const filename = contextTargetMessage.getAttribute('data-filename');
+          if (filename) {
+            vscode.postMessage({ type: 'openFile', payload: filename });
+          }
+        }
+        hideContextMenu();
+      });
+
+      contextDelete.addEventListener('click', () => {
+        if (contextTargetMessage) {
+          const filename = contextTargetMessage.getAttribute('data-filename');
+          const sender = contextTargetMessage.getAttribute('data-sender');
+          if (filename && sender === currentUser) {
+            vscode.postMessage({ type: 'deleteMessage', payload: filename });
+          }
+        }
+        hideContextMenu();
+      });
 
       // Scroll to bottom of messages
       const messagesContainer = document.getElementById('messagesContainer');
