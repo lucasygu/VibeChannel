@@ -386,6 +386,20 @@ export class ChatPanel {
           this.deleteMessageFile(message.payload);
         }
         break;
+      case 'editMessage':
+        if (message.payload && typeof message.payload === 'object') {
+          const { filename, content, files, images, attachments } = message.payload as {
+            filename: string;
+            content: string;
+            files?: string[];
+            images?: string[];
+            attachments?: string[];
+          };
+          if (filename) {
+            this.editMessageFile(filename, content, files, images, attachments);
+          }
+        }
+        break;
     }
   }
 
@@ -566,6 +580,102 @@ date: ${isoTimestamp}`;
     }
   }
 
+  private async editMessageFile(
+    filename: string,
+    newContent: string,
+    newFiles?: string[],
+    newImages?: string[],
+    newAttachments?: string[]
+  ): Promise<void> {
+    const authService = GitHubAuthService.getInstance();
+    const user = authService.getUser();
+
+    if (!user) {
+      vscode.window.showErrorMessage('You must be signed in to edit messages');
+      return;
+    }
+
+    try {
+      const channelPath = this.getCurrentChannelPath();
+      if (!channelPath) {
+        vscode.window.showErrorMessage('Channel path not available');
+        return;
+      }
+
+      const filepath = path.join(channelPath, filename);
+
+      // Verify file exists
+      if (!fs.existsSync(filepath)) {
+        vscode.window.showErrorMessage('Message file not found');
+        return;
+      }
+
+      // Read and parse the existing file
+      const existingContent = fs.readFileSync(filepath, 'utf-8');
+      const matter = require('gray-matter');
+      const parsed = matter(existingContent);
+
+      // Update the edited timestamp
+      const editedDate = new Date();
+      parsed.data.edited = editedDate.toISOString();
+
+      // Rebuild the file with updated content
+      let frontmatter = '---';
+      frontmatter += `\nfrom: ${parsed.data.from}`;
+      frontmatter += `\ndate: ${parsed.data.date}`;
+      if (parsed.data.reply_to) {
+        frontmatter += `\nreply_to: ${parsed.data.reply_to}`;
+      }
+      if (parsed.data.tags && parsed.data.tags.length > 0) {
+        frontmatter += `\ntags:`;
+        for (const tag of parsed.data.tags) {
+          frontmatter += `\n  - ${tag}`;
+        }
+      }
+      // Use new files/images/attachments if provided, otherwise keep original
+      const files = newFiles !== undefined ? newFiles : parsed.data.files;
+      const images = newImages !== undefined ? newImages : parsed.data.images;
+      const attachments = newAttachments !== undefined ? newAttachments : parsed.data.attachments;
+
+      if (files && files.length > 0) {
+        frontmatter += `\nfiles:`;
+        for (const file of files) {
+          frontmatter += `\n  - ${file}`;
+        }
+      }
+      if (images && images.length > 0) {
+        frontmatter += `\nimages:`;
+        for (const image of images) {
+          frontmatter += `\n  - ${image}`;
+        }
+      }
+      if (attachments && attachments.length > 0) {
+        frontmatter += `\nattachments:`;
+        for (const attachment of attachments) {
+          frontmatter += `\n  - ${attachment}`;
+        }
+      }
+      frontmatter += `\nedited: ${parsed.data.edited}`;
+      frontmatter += `\n---\n\n`;
+
+      const fileContent = frontmatter + newContent;
+
+      // Write the updated file
+      fs.writeFileSync(filepath, fileContent, 'utf-8');
+
+      // Commit the edit using GitService
+      const sender = user.login.toLowerCase();
+      await this.gitService.commitChanges(`Edit message by ${sender}`);
+
+      // Queue push via sync service
+      await this.syncService.queuePush();
+
+      // The file watcher will pick up the change and refresh the view
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to edit message: ${error}`);
+    }
+  }
+
   public refresh(): void {
     // Refresh channels list from worktree
     const worktreePath = this.gitService.getWorktreePath();
@@ -660,6 +770,12 @@ date: ${isoTimestamp}`;
       <span>Open Source File</span>
     </div>
     <div class="context-menu-separator"></div>
+    <div class="context-menu-item" id="contextEdit">
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path fill="currentColor" d="M13.23 1h-1.46L3.52 9.25l-.16.22L1 13.59 2.41 15l4.12-2.36.22-.16L15 4.23V2.77L13.23 1zM2.41 13.59l1.51-3 1.45 1.45-2.96 1.55zm3.83-2.06L4.47 9.76l8-8 1.77 1.77-8 8z"/>
+      </svg>
+      <span>Edit Message</span>
+    </div>
     <div class="context-menu-item context-menu-danger" id="contextDelete">
       <svg viewBox="0 0 16 16" width="14" height="14">
         <path fill="currentColor" d="M5.5 5.5v7h1v-7h-1zm4 0v7h1v-7h-1zm-5-4v1H2v1h1v10.5l.5.5h9l.5-.5V3.5h1v-1h-2.5v-1h-6zm1 1h4v1h-4v-1zM4 3.5h8V13H4V3.5z"/>
@@ -740,10 +856,20 @@ date: ${isoTimestamp}`;
     const renderedContent = this.renderMarkdown(message.content);
     const colorClass = this.getSenderColorClass(message.from);
 
-    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}">
+    const editedTimestamp = message.edited
+      ? `<span class="edited-indicator" title="Edited ${message.edited.toISOString()}">(edited ${relativeTime ? this.formatRelativeTime(message.edited) : this.formatAbsoluteTime(message.edited)})</span>`
+      : '';
+
+    // Encode arrays as JSON for data attributes (escape for HTML attribute)
+    const filesData = this.escapeHtml(JSON.stringify(message.files || []));
+    const imagesData = this.escapeHtml(JSON.stringify(message.images || []));
+    const attachmentsData = this.escapeHtml(JSON.stringify(message.attachments || []));
+
+    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}" data-content="${this.escapeHtml(message.content)}" data-files="${filesData}" data-images="${imagesData}" data-attachments="${attachmentsData}">
       <div class="message-header">
         <span class="sender">${this.escapeHtml(message.from)}</span>
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
+        ${editedTimestamp}
         ${message.replyTo ? `<span class="reply-indicator" title="Reply to ${this.escapeHtml(message.replyTo)}">↩</span>` : ''}
       </div>
       ${message.files && message.files.length > 0 ? this.renderFiles(message.files) : ''}
@@ -841,11 +967,25 @@ date: ${isoTimestamp}`;
           ></textarea>
           <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
         </div>
-        <button class="send-btn" id="sendBtn" title="Send message (Cmd+Enter)">
-          <svg viewBox="0 0 24 24" width="20" height="20">
-            <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-          </svg>
-        </button>
+        <div class="send-buttons" id="sendButtons">
+          <button class="send-btn" id="sendBtn" title="Send message (Cmd+Enter)">
+            <svg viewBox="0 0 24 24" width="20" height="20">
+              <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="edit-buttons hidden" id="editButtons">
+          <button class="cancel-btn" id="cancelEditBtn" title="Cancel edit (Escape)">
+            <svg viewBox="0 0 24 24" width="20" height="20">
+              <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+          <button class="confirm-btn" id="confirmEditBtn" title="Confirm edit (Cmd+Enter)">
+            <svg viewBox="0 0 24 24" width="20" height="20">
+              <path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>`;
   }
@@ -1691,6 +1831,62 @@ date: ${isoTimestamp}`;
       .context-menu-item.hidden {
         display: none;
       }
+
+      /* Edited indicator */
+      .edited-indicator {
+        font-size: 0.8em;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        font-style: italic;
+      }
+
+      /* Edit mode buttons */
+      .send-buttons,
+      .edit-buttons {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .send-buttons.hidden,
+      .edit-buttons.hidden {
+        display: none;
+      }
+
+      .cancel-btn,
+      .confirm-btn {
+        width: 42px;
+        height: 42px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .cancel-btn {
+        background-color: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+        color: var(--vscode-errorForeground, #f48771);
+      }
+
+      .cancel-btn:hover {
+        background-color: #6a2d2d;
+      }
+
+      .confirm-btn {
+        background-color: var(--vscode-testing-iconPassed, #388a34);
+        color: #ffffff;
+      }
+
+      .confirm-btn:hover {
+        background-color: #48a344;
+      }
+
+      /* Edit mode input styling */
+      .message-input.editing {
+        border-color: var(--vscode-focusBorder, #007fd4);
+        background-color: var(--vscode-editor-background, #1e1e1e);
+      }
     `;
   }
 
@@ -1712,18 +1908,29 @@ date: ${isoTimestamp}`;
       const contextMenu = document.getElementById('contextMenu');
       const contextCopy = document.getElementById('contextCopy');
       const contextOpenFile = document.getElementById('contextOpenFile');
+      const contextEdit = document.getElementById('contextEdit');
       const contextDelete = document.getElementById('contextDelete');
       let contextTargetMessage = null;
+
+      // Edit mode state
+      let isEditMode = false;
+      let editingFilename = null;
+      const sendButtons = document.getElementById('sendButtons');
+      const editButtons = document.getElementById('editButtons');
+      const cancelEditBtn = document.getElementById('cancelEditBtn');
+      const confirmEditBtn = document.getElementById('confirmEditBtn');
 
       function showContextMenu(x, y, messageEl) {
         contextTargetMessage = messageEl;
         const sender = messageEl.getAttribute('data-sender');
         const isOwner = currentUser && sender === currentUser;
 
-        // Show/hide delete option based on ownership
+        // Show/hide edit and delete options based on ownership
         if (isOwner) {
+          contextEdit.classList.remove('hidden');
           contextDelete.classList.remove('hidden');
         } else {
+          contextEdit.classList.add('hidden');
           contextDelete.classList.add('hidden');
         }
 
@@ -1754,10 +1961,13 @@ date: ${isoTimestamp}`;
         }
       });
 
-      // Hide on escape key
+      // Hide on escape key (also cancel edit mode)
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           hideContextMenu();
+          if (isEditMode) {
+            exitEditMode();
+          }
         }
       });
 
@@ -1806,6 +2016,120 @@ date: ${isoTimestamp}`;
         }
         hideContextMenu();
       });
+
+      contextEdit.addEventListener('click', () => {
+        if (contextTargetMessage) {
+          const filename = contextTargetMessage.getAttribute('data-filename');
+          const sender = contextTargetMessage.getAttribute('data-sender');
+          const content = contextTargetMessage.getAttribute('data-content');
+          const files = contextTargetMessage.getAttribute('data-files');
+          const images = contextTargetMessage.getAttribute('data-images');
+          const attachments = contextTargetMessage.getAttribute('data-attachments');
+          if (filename && sender === currentUser) {
+            enterEditMode(filename, content || '', files, images, attachments);
+          }
+        }
+        hideContextMenu();
+      });
+
+      function enterEditMode(filename, content, filesJson, imagesJson, attachmentsJson) {
+        isEditMode = true;
+        editingFilename = filename;
+
+        // Load content into input
+        const messageInput = document.getElementById('messageInput');
+        if (messageInput) {
+          messageInput.value = content;
+          messageInput.classList.add('editing');
+          messageInput.style.height = 'auto';
+          messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
+          messageInput.focus();
+        }
+
+        // Load existing files (@ references)
+        try {
+          const files = JSON.parse(filesJson || '[]');
+          selectedFiles = files;
+          renderFileChips();
+        } catch (e) {
+          selectedFiles = [];
+        }
+
+        // Load existing images (no preview for existing ones)
+        try {
+          const images = JSON.parse(imagesJson || '[]');
+          selectedImages = images.map(p => ({ path: p, dataUrl: '' }));
+          renderImageChips();
+        } catch (e) {
+          selectedImages = [];
+        }
+
+        // Load existing attachments
+        try {
+          const attachments = JSON.parse(attachmentsJson || '[]');
+          selectedAttachments = attachments.map(p => ({ path: p, name: p.split('/').pop() || p }));
+          renderAttachmentChips();
+        } catch (e) {
+          selectedAttachments = [];
+        }
+
+        // Switch buttons
+        if (sendButtons) sendButtons.classList.add('hidden');
+        if (editButtons) editButtons.classList.remove('hidden');
+      }
+
+      function exitEditMode() {
+        isEditMode = false;
+        editingFilename = null;
+
+        // Clear input
+        const messageInput = document.getElementById('messageInput');
+        if (messageInput) {
+          messageInput.value = '';
+          messageInput.classList.remove('editing');
+          messageInput.style.height = 'auto';
+        }
+
+        // Clear all chips (reset to empty state)
+        selectedFiles = [];
+        selectedImages = [];
+        selectedAttachments = [];
+        renderFileChips();
+        renderImageChips();
+        renderAttachmentChips();
+
+        // Switch buttons back
+        if (sendButtons) sendButtons.classList.remove('hidden');
+        if (editButtons) editButtons.classList.add('hidden');
+      }
+
+      if (cancelEditBtn) {
+        cancelEditBtn.addEventListener('click', () => {
+          exitEditMode();
+        });
+      }
+
+      if (confirmEditBtn) {
+        confirmEditBtn.addEventListener('click', () => {
+          if (isEditMode && editingFilename) {
+            const messageInput = document.getElementById('messageInput');
+            const newContent = messageInput ? messageInput.value : '';
+            const imagePaths = selectedImages.filter(img => img.path).map(img => img.path);
+            const attachmentPaths = selectedAttachments.filter(att => att.path).map(att => att.path);
+            vscode.postMessage({
+              type: 'editMessage',
+              payload: {
+                filename: editingFilename,
+                content: newContent,
+                files: selectedFiles.length > 0 ? [...selectedFiles] : undefined,
+                images: imagePaths.length > 0 ? imagePaths : undefined,
+                attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined
+              }
+            });
+            exitEditMode();
+          }
+        });
+      }
 
       // Scroll to bottom of messages
       const messagesContainer = document.getElementById('messagesContainer');
@@ -1969,11 +2293,20 @@ date: ${isoTimestamp}`;
       function renderImageChips() {
         imagesChips.innerHTML = selectedImages.map((img, i) => {
           const filename = img.path ? img.path.split('/').pop() : 'Uploading...';
-          return '<span class="image-input-chip" data-index="' + i + '">' +
-            '<img class="image-thumbnail" src="' + img.dataUrl + '" alt="preview" />' +
-            filename +
-            '<span class="remove-chip" data-index="' + i + '">×</span>' +
-          '</span>';
+          // If we have a dataUrl, show thumbnail; otherwise show icon (for existing images in edit mode)
+          if (img.dataUrl) {
+            return '<span class="image-input-chip" data-index="' + i + '">' +
+              '<img class="image-thumbnail" src="' + img.dataUrl + '" alt="preview" />' +
+              filename +
+              '<span class="remove-chip" data-index="' + i + '">×</span>' +
+            '</span>';
+          } else {
+            return '<span class="image-input-chip" data-index="' + i + '">' +
+              '<svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M14 2H2v12h12V2zm-1 10l-3-4-2 3-2-2-2 3V3h9v9z"/><circle fill="currentColor" cx="5" cy="6" r="1.5"/></svg>' +
+              filename +
+              '<span class="remove-chip" data-index="' + i + '">×</span>' +
+            '</span>';
+          }
         }).join('');
 
         // Add click handlers for remove buttons
@@ -2226,7 +2559,25 @@ date: ${isoTimestamp}`;
             }
           } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            sendMessage();
+            if (isEditMode && editingFilename) {
+              // Confirm edit
+              const newContent = messageInput.value;
+              const imagePaths = selectedImages.filter(img => img.path).map(img => img.path);
+              const attachmentPaths = selectedAttachments.filter(att => att.path).map(att => att.path);
+              vscode.postMessage({
+                type: 'editMessage',
+                payload: {
+                  filename: editingFilename,
+                  content: newContent,
+                  files: selectedFiles.length > 0 ? [...selectedFiles] : undefined,
+                  images: imagePaths.length > 0 ? imagePaths : undefined,
+                  attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined
+                }
+              });
+              exitEditMode();
+            } else {
+              sendMessage();
+            }
           }
         });
 
