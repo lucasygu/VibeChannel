@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 import { Conversation, loadConversation, updateConversationMessage, removeConversationMessage } from './conversationLoader';
 import { loadSchema } from './schemaParser';
 import { FolderWatcher, WatcherEvent } from './folderWatcher';
@@ -244,6 +248,26 @@ export class ChatPanel {
     return worktreePath ? path.join(worktreePath, this.currentChannel) : '';
   }
 
+  /**
+   * Get list of files in the repo (respects .gitignore)
+   * Returns paths relative to repo root
+   */
+  private async getRepoFiles(): Promise<string[]> {
+    try {
+      const { stdout } = await execAsync('git ls-files', {
+        cwd: this.repoPath,
+        maxBuffer: 1024 * 1024 * 10, // 10MB buffer for large repos
+      });
+      return stdout
+        .split('\n')
+        .filter(Boolean)
+        .filter(f => !f.startsWith('.git/')); // Extra safety
+    } catch (error) {
+      console.error('Failed to list repo files:', error);
+      return [];
+    }
+  }
+
   private startWatcher(): void {
     this.watcher?.dispose();
     this.watcher = new FolderWatcher(
@@ -292,14 +316,35 @@ export class ChatPanel {
           });
         }
         break;
+      case 'openRepoFile':
+        // Open a file from the repo (for attachments)
+        if (typeof message.payload === 'string') {
+          const filepath = path.join(this.repoPath, message.payload);
+          vscode.workspace.openTextDocument(filepath).then((doc) => {
+            vscode.window.showTextDocument(doc);
+          });
+        }
+        break;
       case 'signIn':
         vscode.commands.executeCommand('vibechannel.signIn');
         break;
       case 'signOut':
         vscode.commands.executeCommand('vibechannel.signOut');
         break;
+      case 'getRepoFiles':
+        // Return list of files for autocomplete
+        this.getRepoFiles().then((files) => {
+          this.panel.webview.postMessage({ type: 'repoFiles', payload: files });
+        });
+        break;
       case 'sendMessage':
-        if (typeof message.payload === 'string' && message.payload.trim()) {
+        if (message.payload && typeof message.payload === 'object') {
+          const { content, attachments } = message.payload as { content: string; attachments?: string[] };
+          if (content && content.trim()) {
+            this.createMessageFile(content.trim(), attachments);
+          }
+        } else if (typeof message.payload === 'string' && message.payload.trim()) {
+          // Backwards compatibility
           this.createMessageFile(message.payload.trim());
         }
         break;
@@ -357,7 +402,7 @@ export class ChatPanel {
     }
   }
 
-  private async createMessageFile(content: string): Promise<void> {
+  private async createMessageFile(content: string, attachments?: string[]): Promise<void> {
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
 
@@ -394,14 +439,23 @@ export class ChatPanel {
 
       const filepath = path.join(channelPath, filename);
 
-      // Create file content
-      const fileContent = `---
+      // Build frontmatter
+      let frontmatter = `---
 from: ${sender}
-date: ${isoTimestamp}
----
+date: ${isoTimestamp}`;
 
-${content}
-`;
+      // Add attachments if present
+      if (attachments && attachments.length > 0) {
+        frontmatter += `\nattachments:`;
+        for (const attachment of attachments) {
+          frontmatter += `\n  - ${attachment}`;
+        }
+      }
+
+      frontmatter += `\n---\n\n`;
+
+      // Create file content
+      const fileContent = frontmatter + content;
 
       // Write file
       fs.writeFileSync(filepath, fileContent, 'utf-8');
@@ -574,8 +628,20 @@ ${content}
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
         ${message.replyTo ? `<span class="reply-indicator" title="Reply to ${this.escapeHtml(message.replyTo)}">↩</span>` : ''}
       </div>
+      ${message.attachments && message.attachments.length > 0 ? this.renderAttachments(message.attachments) : ''}
       <div class="message-content">${renderedContent}</div>
       ${message.tags && message.tags.length > 0 ? this.renderTags(message.tags) : ''}
+    </div>`;
+  }
+
+  private renderAttachments(attachments: string[]): string {
+    return `<div class="message-attachments">
+      ${attachments.map((file) => `<span class="attachment-chip" data-file="${this.escapeHtml(file)}" title="Click to open ${this.escapeHtml(file)}">
+        <svg viewBox="0 0 16 16" width="12" height="12" class="attachment-icon">
+          <path fill="currentColor" d="M3.5 1.5v13h9v-9l-4-4h-5zm1 1h3.5v3.5h3.5v7.5h-7v-11zm4.5.71l2.29 2.29h-2.29v-2.29z"/>
+        </svg>
+        ${this.escapeHtml(path.basename(file))}
+      </span>`).join('')}
     </div>`;
   }
 
@@ -601,19 +667,25 @@ ${content}
   }
 
   private renderInputField(user: GitHubUser): string {
-    return `<div class="input-container">
-      <img class="input-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
-      <textarea
-        id="messageInput"
-        class="message-input"
-        placeholder="Message #${this.escapeHtml(this.currentChannel)}"
-        rows="1"
-      ></textarea>
-      <button class="send-btn" id="sendBtn" title="Send message (Cmd+Enter)">
-        <svg viewBox="0 0 24 24" width="20" height="20">
-          <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-        </svg>
-      </button>
+    return `<div class="input-wrapper">
+      <div class="attachments-chips" id="attachmentsChips"></div>
+      <div class="input-container">
+        <img class="input-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
+        <div class="input-with-autocomplete">
+          <textarea
+            id="messageInput"
+            class="message-input"
+            placeholder="Message #${this.escapeHtml(this.currentChannel)} (type @ to attach files)"
+            rows="1"
+          ></textarea>
+          <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+        </div>
+        <button class="send-btn" id="sendBtn" title="Send message (Cmd+Enter)">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
     </div>`;
   }
 
@@ -1064,19 +1136,19 @@ ${content}
 
       .input-container {
         display: flex;
-        align-items: flex-end;
+        align-items: flex-start;
         gap: 12px;
       }
 
       .input-avatar {
-        width: 32px;
-        height: 32px;
-        border-radius: 4px;
+        width: 42px;
+        height: 42px;
+        border-radius: 6px;
         flex-shrink: 0;
       }
 
       .message-input {
-        flex: 1;
+        width: 100%;
         padding: 10px 14px;
         border: 1px solid var(--vscode-input-border, #3c3c3c);
         border-radius: 8px;
@@ -1088,6 +1160,7 @@ ${content}
         resize: none;
         min-height: 42px;
         max-height: 200px;
+        box-sizing: border-box;
       }
 
       .message-input:focus {
@@ -1145,6 +1218,130 @@ ${content}
 
       .sign-in-btn-small:hover {
         background-color: var(--vscode-button-hoverBackground, #1177bb);
+      }
+
+      /* Input wrapper for attachments + input */
+      .input-wrapper {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .input-with-autocomplete {
+        flex: 1;
+        position: relative;
+      }
+
+      /* Attachment chips in input area */
+      .attachments-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .attachments-chips:empty {
+        display: none;
+      }
+
+      .attachment-input-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        background-color: var(--vscode-badge-background, #4d4d4d);
+        color: var(--vscode-badge-foreground, #ffffff);
+        font-size: 0.8em;
+      }
+
+      .attachment-input-chip .remove-chip {
+        cursor: pointer;
+        opacity: 0.7;
+        margin-left: 2px;
+      }
+
+      .attachment-input-chip .remove-chip:hover {
+        opacity: 1;
+      }
+
+      /* Autocomplete dropdown */
+      .autocomplete-dropdown {
+        position: absolute;
+        bottom: 100%;
+        left: 0;
+        right: 0;
+        max-height: 200px;
+        overflow-y: auto;
+        background-color: var(--vscode-dropdown-background, #3c3c3c);
+        border: 1px solid var(--vscode-dropdown-border, #454545);
+        border-radius: 4px;
+        display: none;
+        z-index: 1000;
+        margin-bottom: 4px;
+      }
+
+      .autocomplete-dropdown.visible {
+        display: block;
+      }
+
+      .autocomplete-item {
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 0.9em;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .autocomplete-item:hover,
+      .autocomplete-item.selected {
+        background-color: var(--vscode-list-hoverBackground, #2a2d2e);
+      }
+
+      .autocomplete-item .file-icon {
+        opacity: 0.7;
+      }
+
+      .autocomplete-item .file-path {
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        font-size: 0.85em;
+        margin-left: auto;
+      }
+
+      .autocomplete-empty {
+        padding: 12px;
+        text-align: center;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        font-size: 0.9em;
+      }
+
+      /* Message attachments display */
+      .message-attachments {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      .attachment-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        background-color: var(--vscode-textBlockQuote-background, #2d2d2d);
+        color: var(--vscode-textLink-foreground, #3794ff);
+        font-size: 0.8em;
+        cursor: pointer;
+        border: 1px solid var(--vscode-panel-border, #454545);
+      }
+
+      .attachment-chip:hover {
+        background-color: var(--vscode-list-hoverBackground, #2a2d2e);
+      }
+
+      .attachment-icon {
+        opacity: 0.7;
       }
     `;
   }
@@ -1212,18 +1409,130 @@ ${content}
         });
       }
 
+      // Handle attachment clicks in messages
+      document.querySelectorAll('.attachment-chip').forEach(el => {
+        el.addEventListener('click', () => {
+          const file = el.getAttribute('data-file');
+          if (file) {
+            vscode.postMessage({ type: 'openRepoFile', payload: file });
+          }
+        });
+      });
+
       ${isSignedIn ? `
-      // Message input handling
+      // Message input handling with @ file attachments
       const messageInput = document.getElementById('messageInput');
       const sendBtn = document.getElementById('sendBtn');
+      const autocompleteDropdown = document.getElementById('autocompleteDropdown');
+      const attachmentsChips = document.getElementById('attachmentsChips');
+
+      let repoFiles = [];
+      let selectedAttachments = [];
+      let autocompleteVisible = false;
+      let selectedIndex = 0;
+      let searchStart = -1;
+
+      // Request repo files on load
+      vscode.postMessage({ type: 'getRepoFiles' });
+
+      // Listen for repo files response
+      window.addEventListener('message', (event) => {
+        const message = event.data;
+        if (message.type === 'repoFiles') {
+          repoFiles = message.payload || [];
+        }
+      });
 
       function sendMessage() {
         const content = messageInput.value.trim();
-        if (content) {
-          vscode.postMessage({ type: 'sendMessage', payload: content });
+        if (content || selectedAttachments.length > 0) {
+          vscode.postMessage({
+            type: 'sendMessage',
+            payload: {
+              content: content,
+              attachments: selectedAttachments.length > 0 ? [...selectedAttachments] : undefined
+            }
+          });
           messageInput.value = '';
           messageInput.style.height = 'auto';
+          selectedAttachments = [];
+          renderChips();
         }
+      }
+
+      function renderChips() {
+        attachmentsChips.innerHTML = selectedAttachments.map((file, i) =>
+          '<span class="attachment-input-chip" data-index="' + i + '">' +
+            '<svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M3.5 1.5v13h9v-9l-4-4h-5zm1 1h3.5v3.5h3.5v7.5h-7v-11zm4.5.71l2.29 2.29h-2.29v-2.29z"/></svg>' +
+            file.split('/').pop() +
+            '<span class="remove-chip" data-index="' + i + '">×</span>' +
+          '</span>'
+        ).join('');
+
+        // Add click handlers for remove buttons
+        attachmentsChips.querySelectorAll('.remove-chip').forEach(el => {
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = parseInt(el.getAttribute('data-index'));
+            selectedAttachments.splice(idx, 1);
+            renderChips();
+          });
+        });
+      }
+
+      function showAutocomplete(query) {
+        const filtered = repoFiles
+          .filter(f => f.toLowerCase().includes(query.toLowerCase()))
+          .filter(f => !selectedAttachments.includes(f))
+          .slice(0, 10);
+
+        if (filtered.length === 0) {
+          autocompleteDropdown.innerHTML = '<div class="autocomplete-empty">No matching files</div>';
+        } else {
+          autocompleteDropdown.innerHTML = filtered.map((file, i) => {
+            const parts = file.split('/');
+            const filename = parts.pop();
+            const dir = parts.join('/');
+            return '<div class="autocomplete-item' + (i === selectedIndex ? ' selected' : '') + '" data-file="' + file + '">' +
+              '<span class="file-icon">📄</span>' +
+              '<span class="file-name">' + filename + '</span>' +
+              (dir ? '<span class="file-path">' + dir + '</span>' : '') +
+            '</div>';
+          }).join('');
+
+          // Add click handlers
+          autocompleteDropdown.querySelectorAll('.autocomplete-item').forEach(el => {
+            el.addEventListener('click', () => {
+              selectFile(el.getAttribute('data-file'));
+            });
+          });
+        }
+
+        autocompleteDropdown.classList.add('visible');
+        autocompleteVisible = true;
+        selectedIndex = 0;
+      }
+
+      function hideAutocomplete() {
+        autocompleteDropdown.classList.remove('visible');
+        autocompleteVisible = false;
+        searchStart = -1;
+      }
+
+      function selectFile(file) {
+        if (file && !selectedAttachments.includes(file)) {
+          selectedAttachments.push(file);
+          renderChips();
+        }
+        // Remove the @query from the input
+        if (searchStart >= 0) {
+          const before = messageInput.value.substring(0, searchStart);
+          const afterMatch = messageInput.value.substring(searchStart).match(/^@[^\\s]*/);
+          const after = afterMatch ? messageInput.value.substring(searchStart + afterMatch[0].length) : '';
+          messageInput.value = before + after;
+        }
+        hideAutocomplete();
+        messageInput.focus();
       }
 
       // Send button click
@@ -1231,19 +1540,72 @@ ${content}
         sendBtn.addEventListener('click', sendMessage);
       }
 
-      // Auto-resize textarea
+      // Auto-resize textarea and handle @ trigger
       if (messageInput) {
-        messageInput.addEventListener('input', () => {
+        messageInput.addEventListener('input', (e) => {
           messageInput.style.height = 'auto';
           messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
+
+          // Check for @ trigger
+          const value = messageInput.value;
+          const cursorPos = messageInput.selectionStart;
+
+          // Find the last @ before cursor
+          let atPos = -1;
+          for (let i = cursorPos - 1; i >= 0; i--) {
+            if (value[i] === '@') {
+              atPos = i;
+              break;
+            }
+            if (value[i] === ' ' || value[i] === '\\n') {
+              break;
+            }
+          }
+
+          if (atPos >= 0) {
+            const query = value.substring(atPos + 1, cursorPos);
+            if (query.length >= 0 && !query.includes(' ')) {
+              searchStart = atPos;
+              showAutocomplete(query);
+            } else {
+              hideAutocomplete();
+            }
+          } else {
+            hideAutocomplete();
+          }
         });
 
-        // Cmd+Enter or Ctrl+Enter to send
+        // Keyboard navigation
         messageInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+          if (autocompleteVisible) {
+            const items = autocompleteDropdown.querySelectorAll('.autocomplete-item');
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+              items.forEach((el, i) => el.classList.toggle('selected', i === selectedIndex));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              selectedIndex = Math.max(selectedIndex - 1, 0);
+              items.forEach((el, i) => el.classList.toggle('selected', i === selectedIndex));
+            } else if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+              e.preventDefault();
+              const selected = items[selectedIndex];
+              if (selected) {
+                selectFile(selected.getAttribute('data-file'));
+              }
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              hideAutocomplete();
+            }
+          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             sendMessage();
           }
+        });
+
+        // Hide autocomplete on blur (with delay for click handling)
+        messageInput.addEventListener('blur', () => {
+          setTimeout(hideAutocomplete, 200);
         });
 
         // Focus the input

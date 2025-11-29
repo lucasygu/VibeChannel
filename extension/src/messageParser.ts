@@ -9,6 +9,7 @@ export interface Message {
   date: Date;
   replyTo?: string;
   tags?: string[];
+  attachments?: string[];  // File paths relative to repo root
   edited?: Date;
   content: string;
   rawContent: string;
@@ -72,6 +73,17 @@ export function parseMessage(filepath: string): Message | ParseError {
       }
     }
 
+    // Parse attachments (file references)
+    let attachments: string[] | undefined;
+    if (frontmatter.attachments) {
+      if (Array.isArray(frontmatter.attachments)) {
+        attachments = frontmatter.attachments.map(String);
+      } else if (typeof frontmatter.attachments === 'string') {
+        // Handle single attachment or comma-separated
+        attachments = frontmatter.attachments.split(',').map((a: string) => a.trim());
+      }
+    }
+
     return {
       filename,
       filepath,
@@ -79,6 +91,7 @@ export function parseMessage(filepath: string): Message | ParseError {
       date,
       replyTo: frontmatter.reply_to ? String(frontmatter.reply_to) : undefined,
       tags,
+      attachments,
       edited,
       content: content.trim(),
       rawContent: fileContent,
