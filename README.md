@@ -87,12 +87,31 @@ Native iOS app for mobile access. Uses GitHub API directly — no backend server
 
 ## Quick Start
 
-1. Open a git repository in VS Code
-2. Run `VibeChannel: Open VibeChannel` from the command palette
-3. Sign in with GitHub
-4. Create a channel and start chatting
+1. **Install** the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=lucasygu.vibechannel)
+2. **Open** any git repository in VS Code
+3. **Click** the `VibeChannel` button in the status bar (bottom left)
+4. **Sign in** with GitHub when prompted
+5. **Start chatting** — the extension handles everything else
 
 Messages sync via git push/pull automatically.
+
+### The Status Bar Button
+
+Look for **$(comment-discussion) VibeChannel** in your VS Code status bar (bottom left). This is your main entry point:
+
+| Status Bar State | Meaning |
+|-----------------|---------|
+| `VibeChannel` | Click to initialize — sets up the `vibechannel` branch and git worktree |
+| `VibeChannel (3)` | Initialized with 3 channels — click to open chat panel |
+| `VibeChannel (3) •` | New unread messages — click to view |
+
+**First click on a new repo:**
+- Creates a dedicated `vibechannel` git branch
+- Sets up an isolated worktree at `.git/vibechannel-worktree/`
+- Creates a default `general` channel
+- Opens the chat panel
+
+This keeps conversations completely separate from your code — no merge conflicts, no clutter in your main branch.
 
 ---
 

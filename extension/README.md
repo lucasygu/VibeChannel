@@ -64,12 +64,53 @@ Works in VS Code, Cursor, and other VS Code-based editors. iOS app available for
 ## Quick Start
 
 1. **Install** the extension from the marketplace
-2. **Open** a git repository in VS Code
-3. **Run** `VibeChannel: Open VibeChannel` from the command palette
+2. **Open** any git repository in VS Code
+3. **Click** the **VibeChannel** button in the status bar (bottom left)
 4. **Sign in** with GitHub when prompted
-5. **Create** a channel and start chatting
+5. **Start chatting** — the extension handles everything else
 
 Your messages are saved as markdown files and synced via git.
+
+---
+
+## The Status Bar Button
+
+The **VibeChannel** status bar button (bottom left of VS Code) is your main entry point:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Explorer  Search  ...                                      │
+│                                                             │
+│                    Your Code Here                           │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│ 💬 VibeChannel (3)                          main  ✓  Ln 1  │
+└─────────────────────────────────────────────────────────────┘
+      ↑
+   Click here!
+```
+
+### Status Bar States
+
+| Display | Meaning |
+|---------|---------|
+| `VibeChannel` | Not initialized — click to set up |
+| `VibeChannel (3)` | 3 channels available — click to open |
+| `VibeChannel (3) •` | Unread messages — click to view |
+
+### What Happens on First Click
+
+When you click the status bar button on a repo without VibeChannel:
+
+1. **Creates a `vibechannel` branch** — dedicated branch for conversations
+2. **Sets up a git worktree** — isolated at `.git/vibechannel-worktree/`
+3. **Creates `general` channel** — default channel with schema.md
+4. **Opens the chat panel** — ready to send messages
+
+This architecture keeps conversations completely separate from your code:
+- No merge conflicts with your main branch
+- Easy to exclude from CI/CD
+- Clean separation of concerns
 
 ---
 

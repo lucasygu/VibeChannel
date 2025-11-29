@@ -4,6 +4,14 @@
 
 **VibeChannel** is a filesystem-based conversation protocol where a folder of markdown files renders as a chat interface. Each message is an atomic markdown file, making conversations git-friendly, portable, and decentralized.
 
+## Important: Xcode Build Policy
+
+**DO NOT attempt to build the Xcode project.** The user will build it themselves. This includes:
+- Do not run `xcodebuild`
+- Do not run `swift build` for the iOS project
+- Do not attempt to open Xcode via command line to build
+- Only create/edit Swift source files - the user handles building and running
+
 ## Architecture
 
 ```
@@ -14,17 +22,25 @@ VibeChannel/
 │   ├── schema.md                   # Format definition
 │   ├── agent.md                    # AI agent instructions
 │   └── *.md                        # Message files
-└── extension/                      # VSCode extension
-    ├── src/
-    │   ├── extension.ts            # Entry point, commands, activation
-    │   ├── chatPanel.ts            # Webview UI rendering
-    │   ├── schemaParser.ts         # Parse schema.md
-    │   ├── messageParser.ts        # Parse message files
-    │   ├── conversationLoader.ts   # Load full conversation
-    │   ├── folderWatcher.ts        # Watch for file changes
-    │   └── githubAuth.ts           # GitHub authentication
-    ├── package.json
-    └── .env.local                  # Local secrets (git-ignored)
+├── extension/                      # VSCode extension
+│   ├── src/
+│   │   ├── extension.ts            # Entry point, commands, activation
+│   │   ├── chatPanel.ts            # Webview UI rendering
+│   │   ├── schemaParser.ts         # Parse schema.md
+│   │   ├── messageParser.ts        # Parse message files
+│   │   ├── conversationLoader.ts   # Load full conversation
+│   │   ├── folderWatcher.ts        # Watch for file changes
+│   │   └── githubAuth.ts           # GitHub authentication
+│   ├── package.json
+│   └── .env.local                  # Local secrets (git-ignored)
+└── iOS/                            # iOS app (user builds manually)
+    └── VibeChannel/
+        ├── Models/                 # Data models
+        ├── Services/               # API, Auth, Sync services
+        ├── Views/                  # SwiftUI views
+        ├── Utilities/              # Keychain, helpers
+        ├── Secrets.swift           # OAuth credentials (git-ignored)
+        └── Secrets.swift.template  # Template for credentials
 ```
 
 ## Message File Format
