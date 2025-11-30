@@ -220,6 +220,13 @@ export class GitService {
 
       if (!accessResult.canWrite) {
         console.log('GitService: No write access, entering read-only mode');
+
+        // Clean up orphaned local state if it exists (from previous buggy version)
+        if (state.hasLocalBranch || state.hasWorktree) {
+          console.log('GitService: Found orphaned local state, cleaning up...');
+          await this.cleanupOrphanedState(state);
+        }
+
         this.setReadOnly(accessResult.reason || 'no-permission');
         return {
           success: false,
@@ -512,6 +519,57 @@ export class GitService {
     }
 
     await execAsync(`git worktree add "${worktreePath}" ${branchName}`, { cwd: repoPath });
+  }
+
+  /**
+   * Clean up orphaned local state (branch and worktree) that was created by
+   * a previous buggy version before permission was checked.
+   *
+   * This is called when:
+   * - Remote origin exists
+   * - No remote vibechannel branch
+   * - User has no write access
+   * - But local branch/worktree exists (orphaned state)
+   */
+  private async cleanupOrphanedState(state: InitState): Promise<void> {
+    if (!this.config) return;
+
+    console.log('GitService: Cleaning up orphaned local state...');
+
+    // Step 1: Remove worktree first (must be done before deleting branch)
+    if (state.hasWorktree) {
+      console.log('GitService: Removing orphaned worktree...');
+      try {
+        await execAsync(
+          `git worktree remove "${this.config.worktreePath}" --force`,
+          { cwd: this.config.repoPath }
+        );
+        console.log('GitService: Removed orphaned worktree via git');
+      } catch {
+        // Git remove failed - manually clean up
+        console.log('GitService: Git worktree remove failed, cleaning up manually...');
+        if (fs.existsSync(this.config.worktreePath)) {
+          fs.rmSync(this.config.worktreePath, { recursive: true, force: true });
+        }
+        await execAsync('git worktree prune', { cwd: this.config.repoPath }).catch(() => {});
+      }
+    }
+
+    // Step 2: Delete local branch
+    if (state.hasLocalBranch) {
+      console.log('GitService: Removing orphaned local branch...');
+      try {
+        await execAsync(
+          `git branch -D ${this.config.branchName}`,
+          { cwd: this.config.repoPath }
+        );
+        console.log('GitService: Removed orphaned local branch');
+      } catch (error) {
+        console.warn('GitService: Failed to remove orphaned branch:', error);
+      }
+    }
+
+    console.log('GitService: Orphaned state cleanup complete');
   }
 
   /**
