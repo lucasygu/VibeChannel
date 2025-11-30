@@ -49,10 +49,10 @@ jobs:
           echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
 
       - name: Package extension
-        run: npx @vscode/vsce package --no-dependencies
+        run: npx @vscode/vsce package
 
       - name: Publish to VS Marketplace
-        run: npx @vscode/vsce publish --no-dependencies -p ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish -p ${{ secrets.VSCE_PAT }}
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
