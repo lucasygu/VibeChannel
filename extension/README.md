@@ -189,6 +189,35 @@ What if we used markdown files for everything?
 
 ---
 
+## Permissions
+
+VibeChannel requires **write access** to the repository to send messages. This is because messages are stored as git commits on the `vibechannel` branch.
+
+### Access Scenarios
+
+| Scenario | Can Read | Can Write | What Happens |
+|----------|----------|-----------|--------------|
+| Your own repo | ✅ | ✅ | Full access |
+| Collaborator on repo | ✅ | ✅ | Full access |
+| Public repo (no access) | ✅ | ❌ | **Read-only mode** |
+| Forked repo | ✅ | ✅ | Full access (to your fork) |
+
+### Read-Only Mode
+
+If you open a repository where you don't have write access, VibeChannel enters **read-only mode**:
+
+- You can view existing conversations
+- The message input is hidden
+- A banner indicates you're in read-only mode
+
+### How to Get Write Access
+
+1. **Fork the repository** — Create your own copy where you have full access
+2. **Request collaborator access** — Ask the repository owner to add you
+3. **Clone your own repo** — Create a new repository where you're the owner
+
+---
+
 ## Philosophy
 
 > "There's a new kind of coding I call 'vibe coding', where you fully give in to the vibes, embrace exponentials, and forget that the code even exists."

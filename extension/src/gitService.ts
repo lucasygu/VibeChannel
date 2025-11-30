@@ -18,7 +18,13 @@ export interface GitServiceConfig {
 export interface PushResult {
   success: boolean;
   noRemote: boolean;
+  noPermission?: boolean;
   error?: string;
+}
+
+export interface AccessCheckResult {
+  canWrite: boolean;
+  reason?: 'no-remote' | 'no-permission' | 'unknown';
 }
 
 interface InitState {
@@ -33,6 +39,8 @@ export class GitService {
   private static instance: GitService | undefined;
   private config: GitServiceConfig | undefined;
   private initialized = false;
+  private _readOnly = false;
+  private _readOnlyReason: 'no-remote' | 'no-permission' | undefined;
 
   private constructor() {}
 
@@ -50,6 +58,53 @@ export class GitService {
   isInitialized(): boolean {
     return this.initialized;
   }
+
+  /**
+   * Check if the repository is in read-only mode (no write access)
+   */
+  isReadOnly(): boolean {
+    return this._readOnly;
+  }
+
+  /**
+   * Get the reason for read-only mode
+   */
+  getReadOnlyReason(): 'no-remote' | 'no-permission' | undefined {
+    return this._readOnlyReason;
+  }
+
+  /**
+   * Mark the repository as read-only (called when push fails with permission error)
+   */
+  setReadOnly(reason: 'no-remote' | 'no-permission'): void {
+    this._readOnly = true;
+    this._readOnlyReason = reason;
+    console.log(`GitService: Marked as read-only (reason: ${reason})`);
+  }
+
+  // ============================================================================
+  // LOCAL-ONLY MODE (Future Implementation)
+  // ============================================================================
+  //
+  // Local-only mode would allow users to chat without pushing to remote.
+  // This could be useful for:
+  // - Experimenting with VibeChannel on repos they don't have write access to
+  // - Drafting messages before pushing
+  // - Offline usage
+  //
+  // Implementation considerations:
+  // 1. Add a `_localOnlyMode: boolean` flag
+  // 2. In local-only mode:
+  //    - Still create commits locally
+  //    - Skip push operations
+  //    - Show a "local only" indicator in the UI
+  //    - Provide option to "sync" (push) when user gains access
+  // 3. UI should clearly indicate local-only status
+  // 4. Consider how to handle conflicts when syncing later
+  //
+  // To enable: Add a setting `vibechannel.localOnlyMode` or auto-enable
+  // when read-only mode is detected (with user consent).
+  // ============================================================================
 
   /**
    * Main initialization method:
@@ -526,6 +581,11 @@ export class GitService {
       return { success: false, noRemote: true };
     }
 
+    // Don't attempt push if already known to be read-only
+    if (this._readOnly) {
+      return { success: false, noRemote: false, noPermission: true, error: 'Read-only mode' };
+    }
+
     try {
       if (!this.hasRemote()) {
         return { success: false, noRemote: true };
@@ -542,8 +602,23 @@ export class GitService {
       }
       return { success: true, noRemote: false };
     } catch (error) {
+      const errorStr = String(error);
       console.error('GitService: Push failed:', error);
-      return { success: false, noRemote: false, error: String(error) };
+
+      // Detect permission errors (403, "Permission denied", etc.)
+      const isPermissionError =
+        errorStr.includes('403') ||
+        errorStr.includes('Permission') ||
+        errorStr.includes('permission') ||
+        errorStr.includes('denied') ||
+        errorStr.includes('not allowed');
+
+      if (isPermissionError) {
+        this.setReadOnly('no-permission');
+        return { success: false, noRemote: false, noPermission: true, error: errorStr };
+      }
+
+      return { success: false, noRemote: false, error: errorStr };
     }
   }
 
@@ -701,5 +776,7 @@ Your message content here.
   dispose(): void {
     GitService.instance = undefined;
     this.initialized = false;
+    this._readOnly = false;
+    this._readOnlyReason = undefined;
   }
 }

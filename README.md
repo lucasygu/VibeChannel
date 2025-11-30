@@ -128,6 +128,21 @@ This keeps conversations completely separate from your code — no merge conflic
 
 ---
 
+## Permissions
+
+VibeChannel requires **write access** to send messages (they're stored as git commits).
+
+| Scenario | Can Read | Can Write |
+|----------|----------|-----------|
+| Your own repo | ✅ | ✅ |
+| Collaborator | ✅ | ✅ |
+| Public repo (no access) | ✅ | ❌ (read-only) |
+| Forked repo | ✅ | ✅ |
+
+**No write access?** VibeChannel enters read-only mode — you can view conversations but can't send messages. Fork the repo or request collaborator access to participate.
+
+---
+
 ## Message Format
 
 **Filename:** `{YYYYMMDDTHHMMSS}-{sender}-{6-char-id}.md`

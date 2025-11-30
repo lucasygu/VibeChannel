@@ -42,6 +42,7 @@ export class ChatPanel {
   private conversation: Conversation;
   private watcher: FolderWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
+  private isReadOnly = false;
 
   public static async createOrShow(repoPath: string): Promise<void> {
     const column = vscode.window.activeTextEditor
@@ -219,6 +220,8 @@ export class ChatPanel {
       this.syncService.onSync((event) => {
         if (event.type === 'newMessages') {
           this.refresh();
+        } else if (event.type === 'readOnlyMode') {
+          this.enterReadOnlyMode();
         }
       })
     );
@@ -681,6 +684,11 @@ date: ${isoTimestamp}`;
   }
 
   public refresh(): void {
+    // Check if GitService is in read-only mode
+    if (this.gitService.isReadOnly() && !this.isReadOnly) {
+      this.enterReadOnlyMode();
+    }
+
     // Refresh channels list from worktree
     const worktreePath = this.gitService.getWorktreePath();
     if (worktreePath) {
@@ -694,6 +702,30 @@ date: ${isoTimestamp}`;
         ? loadConversation(channelPath)
         : createEmptyConversation(channelPath);
     }
+    this.update();
+  }
+
+  /**
+   * Enter read-only mode - called when push fails due to permission error.
+   * Shows a banner and disables message input.
+   */
+  private enterReadOnlyMode(): void {
+    if (this.isReadOnly) return;
+
+    this.isReadOnly = true;
+    console.log('ChatPanel: Entering read-only mode');
+
+    // Show a warning message to the user
+    vscode.window.showWarningMessage(
+      'You don\'t have write access to this repository. VibeChannel is in read-only mode.',
+      'Learn More'
+    ).then((action) => {
+      if (action === 'Learn More') {
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/lucasygu/VibeChannel#permissions'));
+      }
+    });
+
+    // Refresh to show updated UI with read-only banner
     this.update();
   }
 
@@ -747,14 +779,26 @@ date: ${isoTimestamp}`;
         <span class="message-count">${this.conversation.messages.length} messages</span>
       </header>
 
+      ${this.isReadOnly ? `
+      <div class="read-only-banner">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <span>
+          <strong>Read-only mode:</strong> You don't have write access to this repository.
+          <a href="https://github.com/lucasygu/VibeChannel#permissions">Learn more</a>
+        </span>
+      </div>
+      ` : ''}
+
       <div class="messages-container" id="messagesContainer">
         ${this.renderMessages(timestampDisplay === 'relative')}
       </div>
 
       ${this.conversation.errors.length > 0 ? this.renderErrors() : ''}
 
-      <div class="input-area">
-        ${user ? this.renderInputField(user) : this.renderInputDisabled()}
+      <div class="input-area${this.isReadOnly ? ' input-disabled' : ''}">
+        ${user && !this.isReadOnly ? this.renderInputField(user) : (!this.isReadOnly ? this.renderInputDisabled() : '')}
       </div>
     </main>
   </div>
@@ -1257,6 +1301,34 @@ date: ${isoTimestamp}`;
       .message-count {
         font-size: 0.85em;
         color: var(--vscode-descriptionForeground, #8c8c8c);
+      }
+
+      .read-only-banner {
+        background-color: var(--vscode-inputValidation-warningBackground, #5a4a00);
+        border: 1px solid var(--vscode-inputValidation-warningBorder, #856d00);
+        color: var(--vscode-inputValidation-warningForeground, #ffffff);
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.9em;
+      }
+
+      .read-only-banner svg {
+        flex-shrink: 0;
+      }
+
+      .read-only-banner a {
+        color: var(--vscode-textLink-foreground, #3794ff);
+        text-decoration: none;
+      }
+
+      .read-only-banner a:hover {
+        text-decoration: underline;
+      }
+
+      .input-disabled {
+        display: none !important;
       }
 
       .messages-container {

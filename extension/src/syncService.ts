@@ -7,7 +7,8 @@ export type SyncEventType =
   | 'syncComplete'
   | 'syncError'
   | 'pushComplete'
-  | 'pushError';
+  | 'pushError'
+  | 'readOnlyMode';
 
 export interface SyncEvent {
   type: SyncEventType;
@@ -124,6 +125,10 @@ export class SyncService implements vscode.Disposable {
       } else if (result.noRemote) {
         this.pendingPush = false;
         console.log('SyncService: No remote configured, message saved locally only');
+      } else if (result.noPermission) {
+        this.pendingPush = false;
+        console.log('SyncService: No write permission, entering read-only mode');
+        this._onSync.fire({ type: 'readOnlyMode', data: { reason: 'no-permission' } });
       } else {
         this._onSync.fire({ type: 'pushError', data: result.error || 'Push failed' });
       }
