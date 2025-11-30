@@ -75,6 +75,15 @@ export class SyncService implements vscode.Disposable {
     }
   }
 
+  /**
+   * Reset the sync service state (called when switching repos)
+   */
+  reset(): void {
+    this.stop();
+    this.pendingPush = false;
+    console.log('SyncService: Reset');
+  }
+
   private async sync(): Promise<void> {
     if (!this.gitService.isInitialized()) return;
     if (!this.gitService.hasRemote()) return;

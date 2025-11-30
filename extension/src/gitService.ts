@@ -27,6 +27,14 @@ export interface AccessCheckResult {
   reason?: 'no-remote' | 'no-permission' | 'unknown';
 }
 
+export interface InitResult {
+  success: boolean;
+  readOnly: boolean;
+  reason?: 'no-permission' | 'no-remote' | 'error';
+  hasRemoteBranch: boolean;
+  worktreePath?: string;
+}
+
 interface InitState {
   hasRemoteOrigin: boolean;
   hasRemoteBranch: boolean;
@@ -76,10 +84,69 @@ export class GitService {
   /**
    * Mark the repository as read-only (called when push fails with permission error)
    */
-  setReadOnly(reason: 'no-remote' | 'no-permission'): void {
+  setReadOnly(reason: 'no-remote' | 'no-permission' | 'unknown'): void {
     this._readOnly = true;
-    this._readOnlyReason = reason;
+    // Map 'unknown' to 'no-permission' for storage
+    this._readOnlyReason = reason === 'unknown' ? 'no-permission' : reason;
     console.log(`GitService: Marked as read-only (reason: ${reason})`);
+  }
+
+  /**
+   * Check if user has write access to the remote repository.
+   * Uses git push --dry-run which doesn't actually push anything.
+   *
+   * @returns AccessCheckResult with canWrite boolean and reason if false
+   */
+  async checkWriteAccess(): Promise<AccessCheckResult> {
+    if (!this.config) {
+      return { canWrite: false, reason: 'no-remote' };
+    }
+
+    // No remote = local-only, which is fine
+    if (!this.hasRemoteOrigin()) {
+      return { canWrite: true }; // Local-only mode is allowed
+    }
+
+    try {
+      // Try git push --dry-run (doesn't actually push)
+      // We push to a temp ref that we'll never actually create
+      await execAsync(
+        `git push --dry-run origin HEAD:refs/heads/__vibechannel_access_check__ 2>&1`,
+        { cwd: this.config.repoPath }
+      );
+      return { canWrite: true };
+    } catch (error) {
+      const errorStr = String(error);
+
+      if (errorStr.includes('403') ||
+          errorStr.includes('Permission') ||
+          errorStr.includes('permission') ||
+          errorStr.includes('denied') ||
+          errorStr.includes('not allowed')) {
+        return { canWrite: false, reason: 'no-permission' };
+      }
+
+      // Other errors (network, etc.) - assume can write, will fail later
+      console.log('GitService: checkWriteAccess encountered non-permission error:', errorStr);
+      return { canWrite: true };
+    }
+  }
+
+  /**
+   * Get the remote origin URL
+   */
+  getRemoteUrl(): string | undefined {
+    if (!this.config) return undefined;
+
+    try {
+      const result = execSync('git remote get-url origin', {
+        cwd: this.config.repoPath,
+        encoding: 'utf-8'
+      });
+      return result.trim();
+    } catch {
+      return undefined;
+    }
   }
 
   // ============================================================================
@@ -108,15 +175,24 @@ export class GitService {
 
   /**
    * Main initialization method:
-   * 1. FETCH (if remote origin exists)
-   * 2. DETECT current state
-   * 3. RESOLVE local branch
-   * 4. RESOLVE worktree
-   * 5. SYNC with remote
-   * 6. PUSH to remote (if we created new content)
+   * 1. RESET state for new repo
+   * 2. FETCH (if remote origin exists)
+   * 3. DETECT current state
+   * 4. CHECK PERMISSION (if remote exists but no remote branch)
+   * 5. RESOLVE local branch (only if we have permission or remote branch exists)
+   * 6. RESOLVE worktree
+   * 7. SYNC with remote
+   * 8. PUSH to remote (if we created new content)
+   *
+   * @returns InitResult indicating success/failure and read-only status
    */
-  async initialize(repoPath: string): Promise<void> {
+  async initialize(repoPath: string): Promise<InitResult> {
     console.log('GitService: Starting initialization...');
+
+    // Step 1: RESET state for new repo
+    this._readOnly = false;
+    this._readOnlyReason = undefined;
+    this.initialized = false;
 
     if (!this.isGitRepo(repoPath)) {
       throw new Error('This folder is not a Git repository. Initialize Git first.');
@@ -131,28 +207,52 @@ export class GitService {
       worktreePath,
     };
 
-    // Step 1 & 2: FETCH and DETECT state
+    // Step 2 & 3: FETCH and DETECT state
     const state = await this.detectState();
     console.log('GitService: Initial state:', JSON.stringify(state, null, 2));
 
-    // Step 3: RESOLVE local branch
+    // Step 4: CHECK PERMISSION before creating anything
+    // Only check if remote exists but no remote vibechannel branch
+    // (meaning we'd need to create it, which requires write access)
+    if (state.hasRemoteOrigin && !state.hasRemoteBranch) {
+      console.log('GitService: Checking write access before creating branch...');
+      const accessResult = await this.checkWriteAccess();
+
+      if (!accessResult.canWrite) {
+        console.log('GitService: No write access, entering read-only mode');
+        this.setReadOnly(accessResult.reason || 'no-permission');
+        return {
+          success: false,
+          readOnly: true,
+          reason: 'no-permission',
+          hasRemoteBranch: false,
+          worktreePath: undefined
+        };
+      }
+    }
+
+    // Step 5: RESOLVE local branch (only if we have permission or remote branch exists)
     await this.resolveLocalBranch(state);
 
-    // Step 4: RESOLVE worktree (and populate if new)
+    // Step 6: RESOLVE worktree (and populate if new)
     await this.resolveWorktree(state);
 
-    // Step 5: SYNC with remote (pull if remote exists)
+    // Step 7: SYNC with remote (pull if remote exists)
     if (state.hasRemoteBranch) {
       console.log('GitService: Pulling latest from remote...');
       await this.pull();
     }
 
-    // Step 6: PUSH to remote (if we created new content and remote exists)
+    // Step 8: PUSH to remote (if we created new content and remote exists)
     if (state.hasRemoteOrigin && !state.hasRemoteBranch) {
       console.log('GitService: Pushing new branch to remote...');
       const pushResult = await this.push();
       if (pushResult.success) {
         console.log('GitService: Successfully pushed to remote');
+      } else if (pushResult.noPermission) {
+        // Shouldn't happen since we checked, but handle gracefully
+        console.warn('GitService: Push failed due to permission (unexpected)');
+        this.setReadOnly('no-permission');
       } else if (!pushResult.noRemote) {
         console.warn('GitService: Failed to push to remote:', pushResult.error);
       }
@@ -161,6 +261,13 @@ export class GitService {
     this.initialized = true;
     console.log('GitService: Initialization complete!');
     console.log('GitService: Worktree at:', worktreePath);
+
+    return {
+      success: true,
+      readOnly: this._readOnly,
+      hasRemoteBranch: state.hasRemoteBranch,
+      worktreePath
+    };
   }
 
   private async detectState(): Promise<InitState> {

@@ -60,9 +60,35 @@ export class ChatPanel {
       ChatPanel.currentPanel.dispose();
     }
 
+    // Reset SyncService state before switching repos
+    SyncService.getInstance().reset();
+
     // Initialize GitService for this repo
     const gitService = GitService.getInstance();
-    await gitService.initialize(repoPath);
+    const initResult = await gitService.initialize(repoPath);
+
+    // Handle no-permission case BEFORE creating panel
+    if (!initResult.success && initResult.reason === 'no-permission') {
+      if (!initResult.hasRemoteBranch) {
+        // No remote branch + no permission = show message, don't create panel
+        const action = await vscode.window.showInformationMessage(
+          'This repository doesn\'t have a VibeChannel yet, and you don\'t have write access to create one.',
+          'Fork Repository',
+          'Cancel'
+        );
+
+        if (action === 'Fork Repository') {
+          const remoteUrl = gitService.getRemoteUrl();
+          if (remoteUrl) {
+            const forkUrl = ChatPanel.convertToForkUrl(remoteUrl);
+            vscode.env.openExternal(vscode.Uri.parse(forkUrl));
+          }
+        }
+        return; // Don't create panel - no local state was created
+      }
+      // Has remote branch but no permission = proceed with read-only view
+      // (this case shouldn't happen with current flow, but handle it)
+    }
 
     // Initialize SyncService
     const syncService = SyncService.getInstance();
@@ -96,6 +122,19 @@ export class ChatPanel {
     );
 
     ChatPanel.currentPanel = new ChatPanel(panel, repoPath, gitService, syncService, channels, defaultChannel, conversation);
+  }
+
+  /**
+   * Convert a git remote URL to a GitHub fork URL
+   */
+  private static convertToForkUrl(repoUrl: string): string {
+    // Convert git@github.com:owner/repo.git or https://github.com/owner/repo.git
+    // to https://github.com/owner/repo/fork
+    const match = repoUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+    if (match) {
+      return `https://github.com/${match[1]}/${match[2]}/fork`;
+    }
+    return repoUrl;
   }
 
   private static getChannelsFromWorktree(worktreePath: string): string[] {
@@ -136,9 +175,21 @@ export class ChatPanel {
       ChatPanel.currentPanel.dispose();
     }
 
+    // Reset SyncService state
+    SyncService.getInstance().reset();
+
     // Initialize GitService for this repo
     const gitService = GitService.getInstance();
-    await gitService.initialize(repoPath);
+    const initResult = await gitService.initialize(repoPath);
+
+    // If no permission and no remote branch, dispose panel and show message
+    if (!initResult.success && !initResult.hasRemoteBranch) {
+      panel.dispose();
+      vscode.window.showWarningMessage(
+        'VibeChannel cannot be restored for this repository (no write access and no existing conversations).'
+      );
+      return;
+    }
 
     // Initialize SyncService
     const syncService = SyncService.getInstance();
@@ -797,8 +848,10 @@ date: ${isoTimestamp}`;
 
       ${this.conversation.errors.length > 0 ? this.renderErrors() : ''}
 
-      <div class="input-area${this.isReadOnly ? ' input-disabled' : ''}">
-        ${user && !this.isReadOnly ? this.renderInputField(user) : (!this.isReadOnly ? this.renderInputDisabled() : '')}
+      <div class="input-area">
+        ${this.isReadOnly
+          ? this.renderReadOnlyInput()
+          : (user ? this.renderInputField(user) : this.renderInputDisabled())}
       </div>
     </main>
   </div>
@@ -1042,6 +1095,15 @@ date: ${isoTimestamp}`;
     return `<div class="input-disabled">
       <span class="input-disabled-text">Sign in to send messages</span>
       <button class="sign-in-btn-small" id="signInBtnInput">Sign in with GitHub</button>
+    </div>`;
+  }
+
+  private renderReadOnlyInput(): string {
+    return `<div class="input-readonly">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+      <span>Read-only mode — you don't have write access to this repository</span>
     </div>`;
   }
 
@@ -1327,8 +1389,20 @@ date: ${isoTimestamp}`;
         text-decoration: underline;
       }
 
-      .input-disabled {
-        display: none !important;
+      .input-readonly {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background-color: var(--vscode-editor-inactiveSelectionBackground, #3a3d41);
+        border-radius: 8px;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        font-size: 0.9em;
+      }
+
+      .input-readonly svg {
+        flex-shrink: 0;
+        opacity: 0.7;
       }
 
       .messages-container {
