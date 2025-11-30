@@ -60,6 +60,5 @@ jobs:
           name: vibechannel-${{ env.VERSION }}.vsix
           path: extension/*.vsix
 
-      # Optional: Also publish to Open VSX (for VSCodium, Gitpod, etc.)
-      # - name: Publish to Open VSX
-      #   run: npx ovsx publish -p ${{ secrets.OPEN_VSX_TOKEN }}
+      - name: Publish to Open VSX
+        run: npx ovsx publish *.vsix -p ${{ secrets.OVSX_PAT }}
