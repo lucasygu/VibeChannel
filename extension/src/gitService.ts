@@ -93,7 +93,9 @@ export class GitService {
 
   /**
    * Check if user has write access to the remote repository.
-   * Uses git push --dry-run which doesn't actually push anything.
+   *
+   * NOTE: git push --dry-run does NOT verify server permissions (it only simulates locally).
+   * We must do an actual push to test write access, then clean up the test ref.
    *
    * @returns AccessCheckResult with canWrite boolean and reason if false
    */
@@ -107,13 +109,36 @@ export class GitService {
       return { canWrite: true }; // Local-only mode is allowed
     }
 
+    const testRef = '__vibechannel_access_check__';
+
     try {
-      // Try git push --dry-run (doesn't actually push)
-      // We push to a temp ref that we'll never actually create
+      // Create an empty tree and commit for testing (minimal footprint)
+      const emptyTree = execSync('git hash-object -t tree /dev/null', {
+        cwd: this.config.repoPath,
+        encoding: 'utf-8',
+      }).trim();
+
+      const testCommit = execSync(
+        `git commit-tree ${emptyTree} -m "VibeChannel access check (will be deleted)"`,
+        { cwd: this.config.repoPath, encoding: 'utf-8' }
+      ).trim();
+
+      // Actually push the test ref (--dry-run doesn't verify server permissions!)
       await execAsync(
-        `git push --dry-run origin HEAD:refs/heads/__vibechannel_access_check__ 2>&1`,
+        `git push origin ${testCommit}:refs/heads/${testRef}`,
         { cwd: this.config.repoPath }
       );
+
+      // Success! Clean up the test ref
+      console.log('GitService: Write access confirmed, cleaning up test ref...');
+      await execAsync(
+        `git push origin --delete ${testRef}`,
+        { cwd: this.config.repoPath }
+      ).catch(() => {
+        // Ignore cleanup errors - the ref will be orphaned but harmless
+        console.log('GitService: Could not delete test ref (will be orphaned)');
+      });
+
       return { canWrite: true };
     } catch (error) {
       const errorStr = String(error);
@@ -123,6 +148,7 @@ export class GitService {
           errorStr.includes('permission') ||
           errorStr.includes('denied') ||
           errorStr.includes('not allowed')) {
+        console.log('GitService: No write access detected');
         return { canWrite: false, reason: 'no-permission' };
       }
 
