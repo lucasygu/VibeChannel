@@ -69,8 +69,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const refreshCommand = vscode.commands.registerCommand(
     'vibechannel.refresh',
-    () => {
-      ChatPanel.refresh();
+    async () => {
+      if (ChatPanel.isPanelOpen()) {
+        ChatPanel.refresh();
+      } else {
+        // Panel not open - ask user to open it
+        const action = await vscode.window.showInformationMessage(
+          'VibeChannel is not open. Would you like to open it?',
+          'Open VibeChannel',
+          'Cancel'
+        );
+        if (action === 'Open VibeChannel') {
+          vscode.commands.executeCommand('vibechannel.openCurrent');
+        }
+      }
     }
   );
 

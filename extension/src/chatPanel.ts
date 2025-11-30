@@ -118,6 +118,10 @@ export class ChatPanel {
     return ChatPanel.currentPanel?.panel.visible ?? false;
   }
 
+  public static isPanelOpen(): boolean {
+    return ChatPanel.currentPanel !== undefined;
+  }
+
   /**
    * Revive an existing webview panel after extension reload
    */
