@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Team chat for the vibe coding era. Git-native, AI-friendly conversations in your repo.",
-  "version": "0.6.12",
+  "version": "0.6.13",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
@@ -94,6 +94,26 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically push after sending a message"
+        },
+        "vibechannel.notifications": {
+          "type": "string",
+          "default": "all",
+          "enum": [
+            "all",
+            "mentions",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Notify for all new messages",
+            "Only notify when you are @mentioned",
+            "Disable notifications"
+          ],
+          "description": "When to show notifications for new messages"
+        },
+        "vibechannel.notificationSound": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play sound with notifications (when VS Code is not focused)"
         }
       }
     }
@@ -107,6 +127,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@types/node-notifier": "^8.0.5",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
@@ -115,6 +136,7 @@
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
-    "marked": "^11.0.0"
+    "marked": "^11.0.0",
+    "node-notifier": "^10.0.1"
   }
 }

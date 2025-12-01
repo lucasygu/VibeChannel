@@ -14,6 +14,7 @@ import { marked } from 'marked';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
 import { GitService } from './gitService';
 import { SyncService } from './syncService';
+import { NotificationService } from './notificationService';
 import { markMessagesAsRead } from './extension';
 
 function createEmptyConversation(folderPath: string): Conversation {
@@ -37,6 +38,7 @@ export class ChatPanel {
   private readonly repoPath: string;
   private gitService: GitService;
   private syncService: SyncService;
+  private notificationService: NotificationService;
   private channels: string[];
   private currentChannel: string;
   private conversation: Conversation;
@@ -60,8 +62,9 @@ export class ChatPanel {
       ChatPanel.currentPanel.dispose();
     }
 
-    // Reset SyncService state before switching repos
+    // Reset services state before switching repos
     SyncService.getInstance().reset();
+    NotificationService.getInstance().reset();
 
     // Initialize GitService for this repo
     const gitService = GitService.getInstance();
@@ -247,9 +250,13 @@ export class ChatPanel {
     this.repoPath = repoPath;
     this.gitService = gitService;
     this.syncService = syncService;
+    this.notificationService = NotificationService.getInstance();
     this.channels = channels;
     this.currentChannel = currentChannel;
     this.conversation = conversation;
+
+    // Initialize notification tracking for current channel
+    this.notificationService.initializeChannel(currentChannel, conversation.messages);
 
     // Set initial content
     this.update();
@@ -268,9 +275,9 @@ export class ChatPanel {
 
     // Listen for sync events
     this.disposables.push(
-      this.syncService.onSync((event) => {
+      this.syncService.onSync(async (event) => {
         if (event.type === 'newMessages') {
-          this.refresh();
+          await this.refreshWithNotification();
         } else if (event.type === 'readOnlyMode') {
           this.enterReadOnlyMode();
         }
@@ -469,6 +476,9 @@ export class ChatPanel {
     this.currentChannel = channelName;
     const channelPath = this.getCurrentChannelPath();
     this.conversation = loadConversation(channelPath);
+
+    // Initialize notification tracking for the new channel
+    this.notificationService.initializeChannel(channelName, this.conversation.messages);
 
     // Restart watcher for new channel
     const config = vscode.workspace.getConfiguration('vibechannel');
@@ -754,6 +764,22 @@ date: ${isoTimestamp}`;
         : createEmptyConversation(channelPath);
     }
     this.update();
+  }
+
+  /**
+   * Refresh and check for new message notifications.
+   * Called when sync detects new messages from remote.
+   */
+  private async refreshWithNotification(): Promise<void> {
+    // Refresh the conversation
+    this.refresh();
+
+    // Check for new messages and notify if appropriate
+    await this.notificationService.checkAndNotify(
+      this.currentChannel,
+      this.conversation.messages,
+      this.panel.visible
+    );
   }
 
   /**
