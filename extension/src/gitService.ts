@@ -509,7 +509,7 @@ export class GitService {
     fs.writeFileSync(path.join(worktreePath, 'agent.md'), this.getAgentTemplate());
 
     await execAsync('git add -A', { cwd: worktreePath });
-    await execAsync('git commit -m "Add initial VibeChannel structure"', { cwd: worktreePath });
+    await execAsync('git commit --no-verify -m "Add initial VibeChannel structure"', { cwd: worktreePath });
   }
 
   private async removeWorktree(): Promise<void> {
@@ -745,7 +745,7 @@ export class GitService {
 
     try {
       await execAsync('git add -A', { cwd: this.config.worktreePath });
-      await execAsync(`git commit -m "${message}"`, { cwd: this.config.worktreePath });
+      await execAsync(`git commit --no-verify -m "${message}"`, { cwd: this.config.worktreePath });
     } catch (error) {
       console.log('GitService: Commit result:', error);
     }
@@ -862,7 +862,7 @@ export class GitService {
     try {
       await execAsync('git checkout --ours .', { cwd: this.config.worktreePath }).catch(() => {});
       await execAsync('git add -A', { cwd: this.config.worktreePath });
-      await execAsync('git commit -m "Resolve conflicts (auto)"', {
+      await execAsync('git commit --no-verify -m "Resolve conflicts (auto)"', {
         cwd: this.config.worktreePath,
       }).catch(() => {});
     } catch {
