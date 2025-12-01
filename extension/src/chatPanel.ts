@@ -427,11 +427,12 @@ export class ChatPanel {
         break;
       case 'sendMessage':
         if (message.payload && typeof message.payload === 'object') {
-          const { content, files, images, attachments } = message.payload as {
+          const { content, files, images, attachments, replyTo } = message.payload as {
             content: string;
             files?: string[];
             images?: string[];
             attachments?: string[];
+            replyTo?: string;
           };
           const hasContent = content && content.trim();
           const hasFiles = files && files.length > 0;
@@ -439,7 +440,7 @@ export class ChatPanel {
           const hasAttachments = attachments && attachments.length > 0;
           // Allow messages with text, files, images, or attachments (any combination)
           if (hasContent || hasFiles || hasImages || hasAttachments) {
-            this.createMessageFile(content?.trim() || '', files, images, attachments);
+            this.createMessageFile(content?.trim() || '', files, images, attachments, replyTo);
           }
         } else if (typeof message.payload === 'string' && message.payload.trim()) {
           // Backwards compatibility
@@ -522,7 +523,7 @@ export class ChatPanel {
     }
   }
 
-  private async createMessageFile(content: string, files?: string[], images?: string[], attachments?: string[]): Promise<void> {
+  private async createMessageFile(content: string, files?: string[], images?: string[], attachments?: string[], replyTo?: string): Promise<void> {
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
 
@@ -563,6 +564,11 @@ export class ChatPanel {
       let frontmatter = `---
 from: ${sender}
 date: ${isoTimestamp}`;
+
+      // Add reply_to if this is a reply
+      if (replyTo) {
+        frontmatter += `\nreply_to: ${replyTo}`;
+      }
 
       // Add file references if present
       if (files && files.length > 0) {
@@ -884,6 +890,12 @@ date: ${isoTimestamp}`;
 
   <!-- Custom context menu for messages -->
   <div class="context-menu" id="contextMenu">
+    <div class="context-menu-item" id="contextReply">
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path fill="currentColor" d="M6 3v2H2v6h4v2l4-5-4-5zm1 1.5L9.5 8 7 11.5V10H3V6h4V4.5z"/>
+      </svg>
+      <span>Reply</span>
+    </div>
     <div class="context-menu-item" id="contextCopy">
       <svg viewBox="0 0 16 16" width="14" height="14">
         <path fill="currentColor" d="M4 4h8v8H4V4zm1 1v6h6V5H5zm-3-3v10h2V3H3V2h2V1H2v1H1v11h11v-1h1V2h-1V1H3v1H2z"/>
@@ -997,13 +1009,46 @@ date: ${isoTimestamp}`;
         <span class="sender">${this.escapeHtml(message.from)}</span>
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
         ${editedTimestamp}
-        ${message.replyTo ? `<span class="reply-indicator" title="Reply to ${this.escapeHtml(message.replyTo)}">↩</span>` : ''}
+        ${message.replyTo ? this.renderReplyPreview(message.replyTo) : ''}
       </div>
       ${message.files && message.files.length > 0 ? this.renderFiles(message.files) : ''}
       ${message.images && message.images.length > 0 ? this.renderImages(message.images) : ''}
       <div class="message-content">${renderedContent}</div>
       ${message.attachments && message.attachments.length > 0 ? this.renderAttachments(message.attachments) : ''}
       ${message.tags && message.tags.length > 0 ? this.renderTags(message.tags) : ''}
+    </div>`;
+  }
+
+  /**
+   * Render a preview of the message being replied to
+   */
+  private renderReplyPreview(replyTo: string): string {
+    // Find parent message by filename
+    const parentMessage = this.conversation.messages.find(m => m.filename === replyTo);
+
+    if (!parentMessage) {
+      return `<div class="reply-preview">↩ [deleted message]</div>`;
+    }
+
+    // Truncate content (strip markdown, limit to 60 chars)
+    const plainText = parentMessage.content
+      .replace(/```[\s\S]*?```/g, '[code]')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/!\[.*?\]\(.*?\)/g, '[image]')
+      .replace(/\[([^\]]+)\]\(.*?\)/g, '$1')
+      .replace(/\n/g, ' ')
+      .trim();
+
+    const truncated = plainText.length > 60
+      ? plainText.slice(0, 60) + '...'
+      : plainText;
+
+    return `<div class="reply-preview" data-reply-to="${this.escapeHtml(replyTo)}" title="Click to scroll to original message">
+      <span class="reply-icon">↩</span>
+      <span class="reply-author">${this.escapeHtml(parentMessage.from)}:</span>
+      <span class="reply-text">${this.escapeHtml(truncated)}</span>
     </div>`;
   }
 
@@ -1077,7 +1122,19 @@ date: ${isoTimestamp}`;
   }
 
   private renderInputField(user: GitHubUser): string {
-    return `<div class="input-wrapper">
+    return `<div id="replyBar" class="reply-bar" style="display: none;">
+      <div class="reply-bar-content">
+        <span>↩ Replying to</span>
+        <span class="reply-bar-author" id="replyBarAuthor"></span>
+        <span class="reply-bar-text" id="replyBarText"></span>
+      </div>
+      <button class="reply-bar-cancel" id="replyBarCancel" title="Cancel reply">
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path fill="currentColor" d="M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.707.708L7.293 8l-3.646 3.646.707.708L8 8.707z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="input-wrapper">
       <div class="chips-container">
         <div class="files-chips" id="filesChips"></div>
         <div class="images-chips" id="imagesChips"></div>
@@ -1447,6 +1504,11 @@ date: ${isoTimestamp}`;
         background-color: var(--vscode-editor-inactiveSelectionBackground, #3a3d41);
         border-left: 3px solid transparent;
         margin-bottom: 12px;
+        transition: background-color 0.3s ease;
+      }
+
+      .message.highlight-flash {
+        background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(255, 200, 0, 0.3));
       }
 
       .sender-color-0 { border-left-color: #4fc3f7; }
@@ -1473,10 +1535,90 @@ date: ${isoTimestamp}`;
         color: var(--vscode-descriptionForeground, #8c8c8c);
       }
 
-      .reply-indicator {
-        font-size: 0.85em;
+      .reply-preview {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.8em;
         color: var(--vscode-descriptionForeground, #8c8c8c);
-        cursor: help;
+        cursor: pointer;
+        padding: 4px 8px;
+        margin: -4px 0 4px 0;
+        background-color: var(--vscode-editor-inactiveSelectionBackground, rgba(255, 255, 255, 0.05));
+        border-radius: 4px;
+        border-left: 2px solid var(--vscode-textLink-foreground, #3794ff);
+        max-width: 100%;
+        overflow: hidden;
+      }
+
+      .reply-preview:hover {
+        background-color: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.1));
+      }
+
+      .reply-icon {
+        flex-shrink: 0;
+        opacity: 0.7;
+      }
+
+      .reply-author {
+        font-weight: 500;
+        flex-shrink: 0;
+      }
+
+      .reply-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* Reply bar above input when replying */
+      .reply-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        background-color: var(--vscode-editor-inactiveSelectionBackground, rgba(255, 255, 255, 0.05));
+        border-left: 2px solid var(--vscode-textLink-foreground, #3794ff);
+        margin-bottom: 8px;
+        border-radius: 4px;
+        font-size: 0.85em;
+      }
+
+      .reply-bar-content {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        overflow: hidden;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+      }
+
+      .reply-bar-author {
+        font-weight: 500;
+        color: var(--vscode-foreground, #cccccc);
+      }
+
+      .reply-bar-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .reply-bar-cancel {
+        flex-shrink: 0;
+        background: none;
+        border: none;
+        color: var(--vscode-descriptionForeground, #8c8c8c);
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .reply-bar-cancel:hover {
+        background-color: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.1));
+        color: var(--vscode-foreground, #cccccc);
       }
 
       .message-content {
@@ -2082,11 +2224,21 @@ date: ${isoTimestamp}`;
 
       // Context menu handling
       const contextMenu = document.getElementById('contextMenu');
+      const contextReply = document.getElementById('contextReply');
       const contextCopy = document.getElementById('contextCopy');
       const contextOpenFile = document.getElementById('contextOpenFile');
       const contextEdit = document.getElementById('contextEdit');
       const contextDelete = document.getElementById('contextDelete');
       let contextTargetMessage = null;
+
+      // Reply state
+      let replyingTo = null; // filename of message being replied to
+      let replyingToAuthor = null;
+      let replyingToText = null;
+      const replyBar = document.getElementById('replyBar');
+      const replyBarAuthor = document.getElementById('replyBarAuthor');
+      const replyBarText = document.getElementById('replyBarText');
+      const replyBarCancel = document.getElementById('replyBarCancel');
 
       // Edit mode state
       let isEditMode = false;
@@ -2156,6 +2308,18 @@ date: ${isoTimestamp}`;
       });
 
       // Context menu actions
+      contextReply.addEventListener('click', () => {
+        if (contextTargetMessage) {
+          const filename = contextTargetMessage.getAttribute('data-filename');
+          const sender = contextTargetMessage.getAttribute('data-sender');
+          const content = contextTargetMessage.getAttribute('data-content');
+          if (filename) {
+            enterReplyMode(filename, sender, content);
+          }
+        }
+        hideContextMenu();
+      });
+
       contextCopy.addEventListener('click', () => {
         if (contextTargetMessage) {
           const content = contextTargetMessage.querySelector('.message-content');
@@ -2279,6 +2443,63 @@ date: ${isoTimestamp}`;
         if (editButtons) editButtons.classList.add('hidden');
       }
 
+      function enterReplyMode(filename, author, content) {
+        // Cancel edit mode if active
+        if (isEditMode) {
+          exitEditMode();
+        }
+
+        replyingTo = filename;
+        replyingToAuthor = author;
+
+        // Truncate content for display
+        const plainText = (content || '')
+          .replace(/\n/g, ' ')
+          .trim();
+        replyingToText = plainText.length > 50 ? plainText.slice(0, 50) + '...' : plainText;
+
+        // Show reply bar
+        if (replyBar) {
+          replyBar.style.display = 'flex';
+        }
+        if (replyBarAuthor) {
+          replyBarAuthor.textContent = author + ':';
+        }
+        if (replyBarText) {
+          replyBarText.textContent = replyingToText;
+        }
+
+        // Focus input
+        const messageInput = document.getElementById('messageInput');
+        if (messageInput) {
+          messageInput.focus();
+        }
+      }
+
+      function exitReplyMode() {
+        replyingTo = null;
+        replyingToAuthor = null;
+        replyingToText = null;
+
+        // Hide reply bar
+        if (replyBar) {
+          replyBar.style.display = 'none';
+        }
+        if (replyBarAuthor) {
+          replyBarAuthor.textContent = '';
+        }
+        if (replyBarText) {
+          replyBarText.textContent = '';
+        }
+      }
+
+      // Reply bar cancel button
+      if (replyBarCancel) {
+        replyBarCancel.addEventListener('click', () => {
+          exitReplyMode();
+        });
+      }
+
       if (cancelEditBtn) {
         cancelEditBtn.addEventListener('click', () => {
           exitEditMode();
@@ -2377,6 +2598,24 @@ date: ${isoTimestamp}`;
         });
       });
 
+      // Handle reply preview clicks to scroll to parent message
+      document.querySelectorAll('.reply-preview').forEach(el => {
+        el.addEventListener('click', () => {
+          const replyTo = el.getAttribute('data-reply-to');
+          if (replyTo) {
+            const parentMessage = document.querySelector('.message[data-filename="' + replyTo + '"]');
+            if (parentMessage) {
+              parentMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              // Flash highlight the message briefly
+              parentMessage.classList.add('highlight-flash');
+              setTimeout(() => {
+                parentMessage.classList.remove('highlight-flash');
+              }, 1500);
+            }
+          }
+        });
+      });
+
       ${isSignedIn ? `
       // Message input handling with @ file references, image paste, and file paste
       const messageInput = document.getElementById('messageInput');
@@ -2432,7 +2671,8 @@ date: ${isoTimestamp}`;
               content: content,
               files: selectedFiles.length > 0 ? [...selectedFiles] : undefined,
               images: imagePaths.length > 0 ? imagePaths : undefined,
-              attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined
+              attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+              replyTo: replyingTo || undefined
             }
           });
           messageInput.value = '';
@@ -2443,6 +2683,7 @@ date: ${isoTimestamp}`;
           renderFileChips();
           renderImageChips();
           renderAttachmentChips();
+          exitReplyMode();
         }
       }
 
