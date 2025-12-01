@@ -1270,7 +1270,10 @@ date: ${isoTimestamp}`;
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+      .replace(/'/g, '&#039;')
+      .replace(/`/g, '&#96;')
+      .replace(/\$/g, '&#36;')
+      .replace(/\\/g, '&#92;');
   }
 
   private getStyles(): string {
@@ -2308,69 +2311,79 @@ date: ${isoTimestamp}`;
       });
 
       // Context menu actions
-      contextReply.addEventListener('click', () => {
-        if (contextTargetMessage) {
-          const filename = contextTargetMessage.getAttribute('data-filename');
-          const sender = contextTargetMessage.getAttribute('data-sender');
-          const content = contextTargetMessage.getAttribute('data-content');
-          if (filename) {
-            enterReplyMode(filename, sender, content);
+      if (contextReply) {
+        contextReply.addEventListener('click', () => {
+          if (contextTargetMessage) {
+            const filename = contextTargetMessage.getAttribute('data-filename');
+            const sender = contextTargetMessage.getAttribute('data-sender');
+            const content = contextTargetMessage.getAttribute('data-content');
+            if (filename) {
+              enterReplyMode(filename, sender, content);
+            }
           }
-        }
-        hideContextMenu();
-      });
+          hideContextMenu();
+        });
+      }
 
-      contextCopy.addEventListener('click', () => {
-        if (contextTargetMessage) {
-          const content = contextTargetMessage.querySelector('.message-content');
-          if (content) {
-            // Get text content, stripping HTML
-            const text = content.innerText || content.textContent;
-            navigator.clipboard.writeText(text).then(() => {
-              // Could show a toast here
-            }).catch(err => {
-              console.error('Failed to copy:', err);
-            });
+      if (contextCopy) {
+        contextCopy.addEventListener('click', () => {
+          if (contextTargetMessage) {
+            const content = contextTargetMessage.querySelector('.message-content');
+            if (content) {
+              // Get text content, stripping HTML
+              const text = content.innerText || content.textContent;
+              navigator.clipboard.writeText(text).then(() => {
+                // Could show a toast here
+              }).catch(err => {
+                console.error('Failed to copy:', err);
+              });
+            }
           }
-        }
-        hideContextMenu();
-      });
+          hideContextMenu();
+        });
+      }
 
-      contextOpenFile.addEventListener('click', () => {
-        if (contextTargetMessage) {
-          const filename = contextTargetMessage.getAttribute('data-filename');
-          if (filename) {
-            vscode.postMessage({ type: 'openFile', payload: filename });
+      if (contextOpenFile) {
+        contextOpenFile.addEventListener('click', () => {
+          if (contextTargetMessage) {
+            const filename = contextTargetMessage.getAttribute('data-filename');
+            if (filename) {
+              vscode.postMessage({ type: 'openFile', payload: filename });
+            }
           }
-        }
-        hideContextMenu();
-      });
+          hideContextMenu();
+        });
+      }
 
-      contextDelete.addEventListener('click', () => {
-        if (contextTargetMessage) {
-          const filename = contextTargetMessage.getAttribute('data-filename');
-          const sender = contextTargetMessage.getAttribute('data-sender');
-          if (filename && sender === currentUser) {
-            vscode.postMessage({ type: 'deleteMessage', payload: filename });
+      if (contextDelete) {
+        contextDelete.addEventListener('click', () => {
+          if (contextTargetMessage) {
+            const filename = contextTargetMessage.getAttribute('data-filename');
+            const sender = contextTargetMessage.getAttribute('data-sender');
+            if (filename && sender === currentUser) {
+              vscode.postMessage({ type: 'deleteMessage', payload: filename });
+            }
           }
-        }
-        hideContextMenu();
-      });
+          hideContextMenu();
+        });
+      }
 
-      contextEdit.addEventListener('click', () => {
-        if (contextTargetMessage) {
-          const filename = contextTargetMessage.getAttribute('data-filename');
-          const sender = contextTargetMessage.getAttribute('data-sender');
-          const content = contextTargetMessage.getAttribute('data-content');
-          const files = contextTargetMessage.getAttribute('data-files');
-          const images = contextTargetMessage.getAttribute('data-images');
-          const attachments = contextTargetMessage.getAttribute('data-attachments');
-          if (filename && sender === currentUser) {
-            enterEditMode(filename, content || '', files, images, attachments);
+      if (contextEdit) {
+        contextEdit.addEventListener('click', () => {
+          if (contextTargetMessage) {
+            const filename = contextTargetMessage.getAttribute('data-filename');
+            const sender = contextTargetMessage.getAttribute('data-sender');
+            const content = contextTargetMessage.getAttribute('data-content');
+            const files = contextTargetMessage.getAttribute('data-files');
+            const images = contextTargetMessage.getAttribute('data-images');
+            const attachments = contextTargetMessage.getAttribute('data-attachments');
+            if (filename && sender === currentUser) {
+              enterEditMode(filename, content || '', files, images, attachments);
+            }
           }
-        }
-        hideContextMenu();
-      });
+          hideContextMenu();
+        });
+      }
 
       function enterEditMode(filename, content, filesJson, imagesJson, attachmentsJson) {
         isEditMode = true;
@@ -2454,7 +2467,7 @@ date: ${isoTimestamp}`;
 
         // Truncate content for display
         const plainText = (content || '')
-          .replace(/\n/g, ' ')
+          .replace(/\\n/g, ' ')
           .trim();
         replyingToText = plainText.length > 50 ? plainText.slice(0, 50) + '...' : plainText;
 
