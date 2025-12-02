@@ -43,6 +43,13 @@ enum GitHubAPIError: Error, LocalizedError {
     }
 }
 
+/// Rate limit information from GitHub API
+struct GitHubRateLimit {
+    let remaining: Int
+    let limit: Int
+    let resetDate: Date?
+}
+
 class GitHubAPIClient {
     private let baseURL = "https://api.github.com"
     private let session = URLSession.shared
@@ -51,12 +58,37 @@ class GitHubAPIClient {
     /// The branch where all VibeChannel content lives
     static let vibeChannelBranch = "vibechannel"
 
+    /// Last rate limit info from API response
+    private(set) var lastRateLimit: GitHubRateLimit?
+
+    /// Callback when rate limit is updated
+    var onRateLimitUpdate: ((GitHubRateLimit) -> Void)?
+
     init(accessToken: String) {
         self.accessToken = accessToken
     }
 
     func updateToken(_ token: String) {
         self.accessToken = token
+    }
+
+    private func extractRateLimit(from response: HTTPURLResponse) {
+        guard let remainingStr = response.value(forHTTPHeaderField: "X-RateLimit-Remaining"),
+              let limitStr = response.value(forHTTPHeaderField: "X-RateLimit-Limit"),
+              let remaining = Int(remainingStr),
+              let limit = Int(limitStr) else {
+            return
+        }
+
+        var resetDate: Date?
+        if let resetStr = response.value(forHTTPHeaderField: "X-RateLimit-Reset"),
+           let resetTimestamp = Double(resetStr) {
+            resetDate = Date(timeIntervalSince1970: resetTimestamp)
+        }
+
+        let rateLimit = GitHubRateLimit(remaining: remaining, limit: limit, resetDate: resetDate)
+        self.lastRateLimit = rateLimit
+        onRateLimitUpdate?(rateLimit)
     }
 
     // MARK: - Generic Request
@@ -88,6 +120,9 @@ class GitHubAPIClient {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GitHubAPIError.invalidResponse
         }
+
+        // Extract rate limit info from response headers
+        extractRateLimit(from: httpResponse)
 
         print("🌐 [DEBUG] HTTP \(method) \(path) -> Status: \(httpResponse.statusCode)")
 

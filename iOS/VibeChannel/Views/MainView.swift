@@ -13,23 +13,31 @@ struct MainView: View {
     @StateObject private var viewModel = MainViewModel()
 
     var body: some View {
-        NavigationSplitView {
-            ChannelSidebar(
-                viewModel: viewModel,
-                onSignOut: { authService.signOut() }
-            )
-        } detail: {
-            if let channel = viewModel.selectedChannel {
-                ChatView(viewModel: viewModel, channel: channel)
-            } else {
-                ContentUnavailableView(
-                    "Select a Channel",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Choose a channel from the sidebar to start chatting")
+        ZStack(alignment: .top) {
+            NavigationSplitView {
+                ChannelSidebar(
+                    viewModel: viewModel,
+                    onSignOut: { authService.signOut() }
                 )
+            } detail: {
+                if let channel = viewModel.selectedChannel {
+                    ChatView(viewModel: viewModel, channel: channel)
+                } else {
+                    ContentUnavailableView(
+                        "Select a Channel",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Choose a channel from the sidebar to start chatting")
+                    )
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+
+            // Rate limit warning banner
+            if let rateLimitWarning = viewModel.rateLimitWarning {
+                RateLimitBanner(warning: rateLimitWarning)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .navigationSplitViewStyle(.balanced)
         .task {
             await viewModel.initialize(with: authService.currentUser)
         }
@@ -37,6 +45,30 @@ struct MainView: View {
             await viewModel.refresh()
         }
     }
+}
+
+// MARK: - Rate Limit Banner
+
+struct RateLimitBanner: View {
+    let warning: RateLimitWarning
+
+    var body: some View {
+        HStack {
+            Image(systemName: warning.isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.circle.fill")
+            Text(warning.message)
+                .font(.subheadline)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(warning.isCritical ? Color.red : Color.orange)
+        .foregroundColor(.white)
+    }
+}
+
+struct RateLimitWarning {
+    let message: String
+    let isCritical: Bool
 }
 
 // MARK: - View Model
@@ -50,9 +82,14 @@ class MainViewModel: ObservableObject {
     @Published var messages: [Message] = []
     @Published var isLoading = false
     @Published var error: String?
+    @Published var rateLimitWarning: RateLimitWarning?
+
+    // Reply state
+    @Published var replyingTo: Message?
 
     private var api: GitHubAPIClient?
     private var currentUser: GitHubUser?
+    private let repository = MessageRepository.shared
 
     var owner: String {
         selectedRepository?.owner ?? ""
@@ -68,6 +105,14 @@ class MainViewModel: ObservableObject {
         self.currentUser = user
         self.api = GitHubAPIClient(accessToken: user.accessToken)
         SyncService.shared.configure(with: user.accessToken)
+
+        // Configure MessageRepository with SwiftData
+        do {
+            try repository.configure(with: user.accessToken)
+        } catch {
+            print("🔴 [DEBUG] Failed to configure MessageRepository: \(error)")
+            self.error = "Failed to initialize cache: \(error.localizedDescription)"
+        }
 
         await loadRepositories()
     }
@@ -98,6 +143,7 @@ class MainViewModel: ObservableObject {
         selectedRepository = repo
         selectedChannel = nil
         messages = []
+        replyingTo = nil
         await loadChannels()
     }
 
@@ -112,7 +158,8 @@ class MainViewModel: ObservableObject {
         error = nil
 
         do {
-            let fetchedChannels = try await SyncService.shared.fetchChannels(
+            // Use MessageRepository with caching
+            let fetchedChannels = try await repository.fetchChannels(
                 owner: repo.owner,
                 repo: repo.name
             )
@@ -132,10 +179,10 @@ class MainViewModel: ObservableObject {
                 }
             }
 
-            // Start polling
+            // Start polling for changes
             SyncService.shared.startPolling(owner: repo.owner, repo: repo.name) { [weak self] in
                 Task { @MainActor in
-                    await self?.loadMessages()
+                    await self?.loadMessages(forceRefresh: true)
                 }
             }
         } catch {
@@ -148,21 +195,27 @@ class MainViewModel: ObservableObject {
 
     func selectChannel(_ channel: Channel) async {
         selectedChannel = channel
+        replyingTo = nil
         await loadMessages()
     }
 
-    func loadMessages() async {
+    func loadMessages(forceRefresh: Bool = false) async {
         guard let repo = selectedRepository,
               let channel = selectedChannel else { return }
 
         do {
-            let fetchedMessages = try await SyncService.shared.fetchMessages(
+            // Use MessageRepository with caching
+            let fetchedMessages = try await repository.fetchMessages(
                 owner: repo.owner,
                 repo: repo.name,
-                channel: channel.id
+                channel: channel.id,
+                forceRefresh: forceRefresh
             )
             self.messages = fetchedMessages
             self.error = nil
+
+            // Update rate limit warning
+            updateRateLimitWarning()
         } catch {
             self.error = error.localizedDescription
         }
@@ -175,19 +228,69 @@ class MainViewModel: ObservableObject {
               !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         do {
-            let message = try await SyncService.shared.sendMessage(
+            // Use MessageRepository write-through
+            let message = try await repository.sendMessage(
                 owner: repo.owner,
                 repo: repo.name,
                 channel: channel.id,
                 content: content,
-                from: user.login
+                from: user.login,
+                replyTo: replyingTo?.filename
             )
 
             // Add to local messages immediately
             messages.append(message)
+
+            // Clear reply state
+            replyingTo = nil
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    func editMessage(_ message: Message, newContent: String) async {
+        guard let repo = selectedRepository,
+              let channel = selectedChannel else { return }
+
+        do {
+            let updatedMessage = try await repository.editMessage(
+                owner: repo.owner,
+                repo: repo.name,
+                channel: channel.id,
+                message: message,
+                newContent: newContent
+            )
+
+            // Update in local messages
+            if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                messages[index] = updatedMessage
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func deleteMessage(_ message: Message) async {
+        guard let repo = selectedRepository,
+              let channel = selectedChannel else { return }
+
+        do {
+            try await repository.deleteMessage(
+                owner: repo.owner,
+                repo: repo.name,
+                channel: channel.id,
+                message: message
+            )
+
+            // Remove from local messages
+            messages.removeAll { $0.id == message.id }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func setReplyingTo(_ message: Message?) {
+        replyingTo = message
     }
 
     func createChannel(name: String) async {
@@ -200,8 +303,13 @@ class MainViewModel: ObservableObject {
                 name: name
             )
 
-            // Reload channels
-            await loadChannels()
+            // Reload channels (force refresh to get new channel)
+            let fetchedChannels = try await repository.fetchChannels(
+                owner: repo.owner,
+                repo: repo.name,
+                forceRefresh: true
+            )
+            self.channels = fetchedChannels
 
             // Select the new channel
             if let newChannel = channels.first(where: { $0.id == name }) {
@@ -213,7 +321,42 @@ class MainViewModel: ObservableObject {
     }
 
     func refresh() async {
-        await loadMessages()
+        await loadMessages(forceRefresh: true)
+    }
+
+    // MARK: - Rate Limit
+
+    private func updateRateLimitWarning() {
+        guard let info = repository.getRateLimitInfo() else {
+            rateLimitWarning = nil
+            return
+        }
+
+        if info.isExhausted {
+            let resetTime = info.resetDate.map { formatResetTime($0) } ?? "soon"
+            rateLimitWarning = RateLimitWarning(
+                message: "Rate limit exhausted. Resets \(resetTime)",
+                isCritical: true
+            )
+        } else if info.isCritical {
+            rateLimitWarning = RateLimitWarning(
+                message: "Rate limit critical: \(info.remaining) requests remaining",
+                isCritical: true
+            )
+        } else if info.isWarning {
+            rateLimitWarning = RateLimitWarning(
+                message: "Rate limit warning: \(info.remaining) requests remaining",
+                isCritical: false
+            )
+        } else {
+            rateLimitWarning = nil
+        }
+    }
+
+    private func formatResetTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

@@ -21,6 +21,11 @@ struct Message: Identifiable, Codable, Equatable {
     var sha: String?         // GitHub file SHA (for updates/deletes)
     var isPending: Bool = false  // True if not yet synced to GitHub
 
+    // Attachments (matching VS Code extension)
+    var files: [String]?       // @ referenced files (paths in repo)
+    var images: [String]?      // Pasted images (paths in .assets/)
+    var attachments: [String]? // Pasted files (paths in .assets/)
+
     init(
         id: String,
         filename: String,
@@ -32,7 +37,10 @@ struct Message: Identifiable, Codable, Equatable {
         content: String,
         rawContent: String,
         sha: String? = nil,
-        isPending: Bool = false
+        isPending: Bool = false,
+        files: [String]? = nil,
+        images: [String]? = nil,
+        attachments: [String]? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -45,5 +53,8 @@ struct Message: Identifiable, Codable, Equatable {
         self.rawContent = rawContent
         self.sha = sha
         self.isPending = isPending
+        self.files = files
+        self.images = images
+        self.attachments = attachments
     }
 }
