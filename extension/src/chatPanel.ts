@@ -800,6 +800,41 @@ date: ${isoTimestamp}`;
       const firstLine = message.content.split('\n')[0];
       const title = firstLine.length > 80 ? firstLine.substring(0, 77) + '...' : firstLine;
 
+      // Build the issue body with images
+      let issueBody = message.content;
+
+      // Append images as markdown if present
+      if (message.images && message.images.length > 0) {
+        issueBody += '\n\n---\n\n**Attached Images:**\n\n';
+        for (const imagePath of message.images) {
+          // imagePath is like ".assets/20250115T103045-a3f8c2.png"
+          const imageUrl = `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/vibechannel/${imagePath}`;
+          const filename = path.basename(imagePath);
+          issueBody += `![${filename}](${imageUrl})\n\n`;
+        }
+      }
+
+      // Append file references as links if present
+      if (message.files && message.files.length > 0) {
+        issueBody += '\n\n---\n\n**Referenced Files:**\n\n';
+        for (const filePath of message.files) {
+          // Link to file on default branch
+          const fileUrl = `https://github.com/${repoInfo.owner}/${repoInfo.repo}/blob/HEAD/${filePath}`;
+          issueBody += `- [${filePath}](${fileUrl})\n`;
+        }
+      }
+
+      // Append attachments as links if present
+      if (message.attachments && message.attachments.length > 0) {
+        issueBody += '\n\n---\n\n**Attachments:**\n\n';
+        for (const attachmentPath of message.attachments) {
+          // attachmentPath is like ".assets/20250115T103045-a3f8c2.pdf"
+          const attachmentUrl = `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/vibechannel/${attachmentPath}`;
+          const filename = path.basename(attachmentPath);
+          issueBody += `- [${filename}](${attachmentUrl})\n`;
+        }
+      }
+
       // Create issue via GitHub API
       const response = await fetch(`https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues`, {
         method: 'POST',
@@ -810,7 +845,7 @@ date: ${isoTimestamp}`;
         },
         body: JSON.stringify({
           title: title || 'VibeChannel Message',
-          body: message.content,
+          body: issueBody,
         }),
       });
 
