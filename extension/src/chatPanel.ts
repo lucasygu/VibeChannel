@@ -418,14 +418,6 @@ export class ChatPanel {
       case 'createChannel':
         this.promptCreateChannel();
         break;
-      case 'openFile':
-        if (typeof message.payload === 'string') {
-          const filepath = path.join(this.getCurrentChannelPath(), message.payload);
-          vscode.workspace.openTextDocument(filepath).then((doc) => {
-            vscode.window.showTextDocument(doc);
-          });
-        }
-        break;
       case 'openRepoFile':
         // Open a file from the repo (for @ file references)
         if (typeof message.payload === 'string') {
@@ -983,13 +975,6 @@ date: ${isoTimestamp}`;
       </svg>
       <span>Copy</span>
     </div>
-    <div class="context-menu-item" id="contextOpenFile">
-      <svg viewBox="0 0 16 16" width="14" height="14">
-        <path fill="currentColor" d="M3.5 1.5v13h9v-9l-4-4h-5zm1 1h3.5v3.5h3.5v7.5h-7v-11zm4.5.71l2.29 2.29h-2.29v-2.29z"/>
-      </svg>
-      <span>Open Source File</span>
-    </div>
-    <div class="context-menu-separator"></div>
     <div class="context-menu-item" id="contextEdit">
       <svg viewBox="0 0 16 16" width="14" height="14">
         <path fill="currentColor" d="M13.23 1h-1.46L3.52 9.25l-.16.22L1 13.59 2.41 15l4.12-2.36.22-.16L15 4.23V2.77L13.23 1zM2.41 13.59l1.51-3 1.45 1.45-2.96 1.55zm3.83-2.06L4.47 9.76l8-8 1.77 1.77-8 8z"/>
@@ -2501,7 +2486,6 @@ date: ${isoTimestamp}`;
       const contextMenu = document.getElementById('contextMenu');
       const contextReply = document.getElementById('contextReply');
       const contextCopy = document.getElementById('contextCopy');
-      const contextOpenFile = document.getElementById('contextOpenFile');
       const contextEdit = document.getElementById('contextEdit');
       const contextDelete = document.getElementById('contextDelete');
       let contextTargetMessage = null;
@@ -2615,17 +2599,6 @@ date: ${isoTimestamp}`;
         });
       }
 
-      if (contextOpenFile) {
-        contextOpenFile.addEventListener('click', () => {
-          if (contextTargetMessage) {
-            const filename = contextTargetMessage.getAttribute('data-filename');
-            if (filename) {
-              vscode.postMessage({ type: 'openFile', payload: filename });
-            }
-          }
-          hideContextMenu();
-        });
-      }
 
       if (contextDelete) {
         contextDelete.addEventListener('click', () => {
@@ -2836,16 +2809,6 @@ date: ${isoTimestamp}`;
           vscode.postMessage({ type: 'createChannel' });
         });
       }
-
-      // Handle message clicks to open source file
-      document.querySelectorAll('.message').forEach(el => {
-        el.addEventListener('dblclick', () => {
-          const filename = el.getAttribute('data-filename');
-          if (filename) {
-            vscode.postMessage({ type: 'openFile', payload: filename });
-          }
-        });
-      });
 
       // Handle sidebar sign in button
       const sidebarSignInBtn = document.getElementById('sidebarSignInBtn');
