@@ -691,10 +691,16 @@ date: ${isoTimestamp}`;
       fs.writeFileSync(filepath, fileContent, 'utf-8');
 
       // Commit the message using GitService
-      await this.gitService.commitChanges(`Message from ${sender}`);
+      const commitSuccess = await this.gitService.commitChanges(`Message from ${sender}`);
 
-      // Queue push via sync service
-      await this.syncService.queuePush();
+      if (!commitSuccess) {
+        vscode.window.showWarningMessage(
+          'Message saved locally but failed to commit. It will appear in your view but may not sync to others.'
+        );
+      } else {
+        // Queue push only if commit succeeded
+        await this.syncService.queuePush();
+      }
 
       // The file watcher will pick up the new file and refresh the view
     } catch (error) {
@@ -731,10 +737,16 @@ date: ${isoTimestamp}`;
 
       // Commit the deletion using GitService
       const sender = user.login.toLowerCase();
-      await this.gitService.commitChanges(`Delete message by ${sender}`);
+      const commitSuccess = await this.gitService.commitChanges(`Delete message by ${sender}`);
 
-      // Queue push via sync service
-      await this.syncService.queuePush();
+      if (!commitSuccess) {
+        vscode.window.showWarningMessage(
+          'Message deleted locally but failed to commit. It may reappear after sync.'
+        );
+      } else {
+        // Queue push only if commit succeeded
+        await this.syncService.queuePush();
+      }
 
       // The file watcher will pick up the deletion and refresh the view
     } catch (error) {
@@ -829,12 +841,17 @@ date: ${isoTimestamp}`;
       fs.writeFileSync(filepath, newFileContent, 'utf-8');
 
       // Commit the change
-      await this.gitService.commitChanges(`Link message to GitHub issue #${issueData.number}`);
+      const commitSuccess = await this.gitService.commitChanges(`Link message to GitHub issue #${issueData.number}`);
 
-      // Queue push
-      await this.syncService.queuePush();
-
-      vscode.window.showInformationMessage(`Created GitHub issue #${issueData.number}`);
+      if (!commitSuccess) {
+        vscode.window.showWarningMessage(
+          `Created GitHub issue #${issueData.number}, but failed to save the link locally. The issue link may not appear until you refresh.`
+        );
+      } else {
+        // Queue push only if commit succeeded
+        await this.syncService.queuePush();
+        vscode.window.showInformationMessage(`Created GitHub issue #${issueData.number}`);
+      }
 
       // Refresh the view
       this.refresh();
@@ -928,10 +945,16 @@ date: ${isoTimestamp}`;
 
       // Commit the edit using GitService
       const sender = user.login.toLowerCase();
-      await this.gitService.commitChanges(`Edit message by ${sender}`);
+      const commitSuccess = await this.gitService.commitChanges(`Edit message by ${sender}`);
 
-      // Queue push via sync service
-      await this.syncService.queuePush();
+      if (!commitSuccess) {
+        vscode.window.showWarningMessage(
+          'Edit saved locally but failed to commit. It will appear in your view but may not sync to others.'
+        );
+      } else {
+        // Queue push only if commit succeeded
+        await this.syncService.queuePush();
+      }
 
       // The file watcher will pick up the change and refresh the view
     } catch (error) {

@@ -815,14 +815,16 @@ export class GitService {
     return path.join(this.config.worktreePath, ASSETS_DIR);
   }
 
-  async commitChanges(message: string): Promise<void> {
-    if (!this.config?.worktreePath) return;
+  async commitChanges(message: string): Promise<boolean> {
+    if (!this.config?.worktreePath) return false;
 
     try {
       await execAsync('git add -A', { cwd: this.config.worktreePath });
       await execAsync(`git commit --no-verify -m "${message}"`, { cwd: this.config.worktreePath });
+      return true;
     } catch (error) {
       console.log('GitService: Commit result:', error);
+      return false;
     }
   }
 
