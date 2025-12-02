@@ -150,6 +150,34 @@ export class GitHubAuthService implements vscode.Disposable {
   }
 
   /**
+   * Get a token with repo scope (for creating issues, etc.)
+   * This may prompt the user to grant additional permissions
+   */
+  public async getRepoScopedToken(): Promise<string | null> {
+    try {
+      const session = await vscode.authentication.getSession(
+        'github',
+        ['read:user', 'repo'],
+        { createIfNone: true }
+      );
+
+      if (session) {
+        return session.accessToken;
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('cancelled') || error.message.includes('User did not consent')) {
+          return null;
+        }
+      }
+      vscode.window.showErrorMessage(
+        'Failed to get GitHub permissions for creating issues. Please try again.'
+      );
+    }
+    return null;
+  }
+
+  /**
    * Subscribe to auth state changes
    */
   public onAuthStateChange(callback: AuthStateChangeCallback): vscode.Disposable {

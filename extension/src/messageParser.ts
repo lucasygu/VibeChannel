@@ -13,6 +13,7 @@ export interface Message {
   images?: string[];       // Attached images stored in worktree .assets/ folder
   attachments?: string[];  // Attached non-image files stored in worktree .assets/ folder
   edited?: Date;
+  githubIssue?: string;    // Link to GitHub issue created from this message
   content: string;
   rawContent: string;
 }
@@ -108,6 +109,9 @@ export function parseMessage(filepath: string): Message | ParseError {
       }
     }
 
+    // Parse github_issue
+    const githubIssue = frontmatter.github_issue ? String(frontmatter.github_issue) : undefined;
+
     return {
       filename,
       filepath,
@@ -119,6 +123,7 @@ export function parseMessage(filepath: string): Message | ParseError {
       images,
       attachments,
       edited,
+      githubIssue,
       content: content.trim(),
       rawContent: fileContent,
     };

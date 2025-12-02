@@ -489,6 +489,11 @@ export class ChatPanel {
           this.deleteMessageFile(message.payload);
         }
         break;
+      case 'createGitHubIssue':
+        if (typeof message.payload === 'string') {
+          this.createGitHubIssue(message.payload);
+        }
+        break;
       case 'editMessage':
         if (message.payload && typeof message.payload === 'object') {
           const { filename, content, files, images, attachments } = message.payload as {
@@ -734,6 +739,107 @@ date: ${isoTimestamp}`;
       // The file watcher will pick up the deletion and refresh the view
     } catch (error) {
       vscode.window.showErrorMessage(`Failed to delete message: ${error}`);
+    }
+  }
+
+  private async createGitHubIssue(filename: string): Promise<void> {
+    const authService = GitHubAuthService.getInstance();
+    const user = authService.getUser();
+
+    if (!user) {
+      vscode.window.showErrorMessage('You must be signed in to create GitHub issues');
+      return;
+    }
+
+    try {
+      // Find the message
+      const message = this.conversation.messages.find(m => m.filename === filename);
+      if (!message) {
+        vscode.window.showErrorMessage('Message not found');
+        return;
+      }
+
+      // Verify ownership
+      if (message.from.toLowerCase() !== user.login.toLowerCase()) {
+        vscode.window.showErrorMessage('You can only create issues from your own messages');
+        return;
+      }
+
+      // Check if already has an issue
+      if (message.githubIssue) {
+        vscode.window.showInformationMessage('This message already has a GitHub issue linked');
+        return;
+      }
+
+      // Get repo owner and name from git remote
+      const repoInfo = await this.gitService.getRepoInfo();
+      if (!repoInfo) {
+        vscode.window.showErrorMessage('Could not determine repository information. Make sure you have a GitHub remote configured.');
+        return;
+      }
+
+      // Get token with repo scope
+      const token = await authService.getRepoScopedToken();
+      if (!token) {
+        return; // User cancelled or error already shown
+      }
+
+      // Create the issue title (first line or truncated content)
+      const firstLine = message.content.split('\n')[0];
+      const title = firstLine.length > 80 ? firstLine.substring(0, 77) + '...' : firstLine;
+
+      // Create issue via GitHub API
+      const response = await fetch(`https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'VibeChannel-VSCode-Extension',
+        },
+        body: JSON.stringify({
+          title: title || 'VibeChannel Message',
+          body: message.content,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({})) as { message?: string };
+        throw new Error(`GitHub API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+      }
+
+      const issueData = await response.json() as { html_url: string; number: number };
+
+      // Update the message file with the issue link
+      const channelPath = this.getCurrentChannelPath();
+      if (!channelPath) {
+        vscode.window.showErrorMessage('Channel path not available');
+        return;
+      }
+
+      const filepath = path.join(channelPath, filename);
+      const existingContent = fs.readFileSync(filepath, 'utf-8');
+      const matter = require('gray-matter');
+      const parsed = matter(existingContent);
+
+      // Add github_issue to frontmatter
+      parsed.data.github_issue = issueData.html_url;
+
+      // Rebuild the file
+      const newFileContent = matter.stringify(parsed.content, parsed.data);
+      fs.writeFileSync(filepath, newFileContent, 'utf-8');
+
+      // Commit the change
+      await this.gitService.commitChanges(`Link message to GitHub issue #${issueData.number}`);
+
+      // Queue push
+      await this.syncService.queuePush();
+
+      vscode.window.showInformationMessage(`Created GitHub issue #${issueData.number}`);
+
+      // Refresh the view
+      this.refresh();
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to create GitHub issue: ${error instanceof Error ? error.message : error}`);
     }
   }
 
@@ -987,6 +1093,13 @@ date: ${isoTimestamp}`;
       </svg>
       <span>Delete Message</span>
     </div>
+    <div class="context-menu-separator" id="contextIssueSeparator"></div>
+    <div class="context-menu-item" id="contextCreateIssue">
+      <svg viewBox="0 0 16 16" width="14" height="14">
+        <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      <span>Create GitHub Issue</span>
+    </div>
   </div>
 
   <script>
@@ -1137,8 +1250,9 @@ date: ${isoTimestamp}`;
     const filesData = this.escapeHtml(JSON.stringify(message.files || []));
     const imagesData = this.escapeHtml(JSON.stringify(message.images || []));
     const attachmentsData = this.escapeHtml(JSON.stringify(message.attachments || []));
+    const hasIssue = message.githubIssue ? 'true' : 'false';
 
-    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}" data-content="${this.escapeHtml(message.content)}" data-files="${filesData}" data-images="${imagesData}" data-attachments="${attachmentsData}">
+    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}" data-content="${this.escapeHtml(message.content)}" data-files="${filesData}" data-images="${imagesData}" data-attachments="${attachmentsData}" data-has-issue="${hasIssue}">
       <div class="message-header">
         <span class="sender">${this.escapeHtml(message.from)}</span>
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
@@ -1150,6 +1264,7 @@ date: ${isoTimestamp}`;
       <div class="message-content">${renderedContent}</div>
       ${message.attachments && message.attachments.length > 0 ? this.renderAttachments(message.attachments) : ''}
       ${message.tags && message.tags.length > 0 ? this.renderTags(message.tags) : ''}
+      ${message.githubIssue ? this.renderGitHubIssueLink(message.githubIssue) : ''}
     </div>`;
   }
 
@@ -1237,6 +1352,21 @@ date: ${isoTimestamp}`;
   private renderTags(tags: string[]): string {
     return `<div class="message-tags">
       ${tags.map((tag) => `<span class="tag">${this.escapeHtml(tag)}</span>`).join('')}
+    </div>`;
+  }
+
+  private renderGitHubIssueLink(issueUrl: string): string {
+    // Extract issue number from URL (e.g., https://github.com/owner/repo/issues/123)
+    const match = issueUrl.match(/\/issues\/(\d+)$/);
+    const issueNumber = match ? `#${match[1]}` : 'Issue';
+
+    return `<div class="message-issue-link">
+      <a href="${this.escapeHtml(issueUrl)}" target="_blank" title="View GitHub Issue">
+        <svg viewBox="0 0 16 16" width="12" height="12">
+          <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        ${issueNumber}
+      </a>
     </div>`;
   }
 
@@ -1961,6 +2091,31 @@ date: ${isoTimestamp}`;
         color: var(--vscode-badge-foreground, #ffffff);
       }
 
+      .message-issue-link {
+        margin-top: 8px;
+      }
+
+      .message-issue-link a {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.85em;
+        color: var(--vscode-textLink-foreground, #3794ff);
+        text-decoration: none;
+        padding: 2px 8px;
+        border-radius: 4px;
+        background-color: var(--vscode-badge-background, #4d4d4d);
+      }
+
+      .message-issue-link a:hover {
+        background-color: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.1));
+        text-decoration: underline;
+      }
+
+      .message-issue-link svg {
+        flex-shrink: 0;
+      }
+
       .date-separator {
         text-align: center;
         margin: 24px 0 16px;
@@ -2488,6 +2643,8 @@ date: ${isoTimestamp}`;
       const contextCopy = document.getElementById('contextCopy');
       const contextEdit = document.getElementById('contextEdit');
       const contextDelete = document.getElementById('contextDelete');
+      const contextCreateIssue = document.getElementById('contextCreateIssue');
+      const contextIssueSeparator = document.getElementById('contextIssueSeparator');
       let contextTargetMessage = null;
 
       // Reply state
@@ -2511,6 +2668,7 @@ date: ${isoTimestamp}`;
         contextTargetMessage = messageEl;
         const sender = messageEl.getAttribute('data-sender');
         const isOwner = currentUser && sender === currentUser;
+        const hasIssue = messageEl.getAttribute('data-has-issue') === 'true';
 
         // Show/hide edit and delete options based on ownership
         if (isOwner) {
@@ -2519,6 +2677,15 @@ date: ${isoTimestamp}`;
         } else {
           contextEdit.classList.add('hidden');
           contextDelete.classList.add('hidden');
+        }
+
+        // Show/hide create issue option (only for owner, only if no issue yet)
+        if (isOwner && !hasIssue && contextCreateIssue && contextIssueSeparator) {
+          contextCreateIssue.classList.remove('hidden');
+          contextIssueSeparator.classList.remove('hidden');
+        } else if (contextCreateIssue && contextIssueSeparator) {
+          contextCreateIssue.classList.add('hidden');
+          contextIssueSeparator.classList.add('hidden');
         }
 
         // Position the menu
@@ -2607,6 +2774,20 @@ date: ${isoTimestamp}`;
             const sender = contextTargetMessage.getAttribute('data-sender');
             if (filename && sender === currentUser) {
               vscode.postMessage({ type: 'deleteMessage', payload: filename });
+            }
+          }
+          hideContextMenu();
+        });
+      }
+
+      if (contextCreateIssue) {
+        contextCreateIssue.addEventListener('click', () => {
+          if (contextTargetMessage) {
+            const filename = contextTargetMessage.getAttribute('data-filename');
+            const sender = contextTargetMessage.getAttribute('data-sender');
+            const hasIssue = contextTargetMessage.getAttribute('data-has-issue') === 'true';
+            if (filename && sender === currentUser && !hasIssue) {
+              vscode.postMessage({ type: 'createGitHubIssue', payload: filename });
             }
           }
           hideContextMenu();

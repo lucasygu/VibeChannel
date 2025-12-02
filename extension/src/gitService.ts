@@ -842,6 +842,34 @@ export class GitService {
     }
   }
 
+  /**
+   * Get repository owner and name from the git remote URL
+   * Returns null if no GitHub remote is configured
+   */
+  async getRepoInfo(): Promise<{ owner: string; repo: string } | null> {
+    if (!this.config?.worktreePath) return null;
+
+    try {
+      const remoteUrl = execSync('git remote get-url origin', {
+        cwd: this.config.worktreePath,
+        encoding: 'utf-8',
+      }).trim();
+
+      // Parse GitHub URL formats:
+      // https://github.com/owner/repo.git
+      // git@github.com:owner/repo.git
+      // https://github.com/owner/repo
+      const match = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)(\.git)?$/);
+      if (match) {
+        return { owner: match[1], repo: match[2] };
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async push(): Promise<PushResult> {
     if (!this.config?.worktreePath) {
       return { success: false, noRemote: true };
