@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Team chat for the vibe coding era. Git-native, AI-friendly conversations in your repo.",
-  "version": "0.6.24",
+  "version": "0.6.25",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {

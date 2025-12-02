@@ -56,18 +56,65 @@ export class GitHubAuthService implements vscode.Disposable {
       );
 
       if (session) {
+        try {
+          const user = await this.fetchUserInfo(session);
+          this.setCurrentUser(user);
+          return user;
+        } catch (fetchError) {
+          // If token is invalid (401), force a new session
+          if (fetchError instanceof Error && fetchError.message.includes('401')) {
+            console.log('GitHub token invalid, forcing new session...');
+            return await this.forceNewSession();
+          }
+          throw fetchError;
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        // User cancelled - not an error
+        if (error.message.includes('cancelled') || error.message.includes('User did not consent')) {
+          return null;
+        }
+        // GitHub provider not available
+        if (error.message.includes('No authentication provider')) {
+          vscode.window.showErrorMessage(
+            'GitHub authentication is not available. Please ensure you have signed into GitHub in VS Code (View → Command Palette → "GitHub: Sign In").'
+          );
+          return null;
+        }
+      }
+      vscode.window.showErrorMessage(`GitHub sign in failed: ${error instanceof Error ? error.message : error}`);
+    }
+
+    return null;
+  }
+
+  /**
+   * Force a new GitHub session (used when existing token is invalid)
+   */
+  private async forceNewSession(): Promise<GitHubUser | null> {
+    try {
+      const session = await vscode.authentication.getSession(
+        'github',
+        this.scopes,
+        { forceNewSession: true }
+      );
+
+      if (session) {
         const user = await this.fetchUserInfo(session);
         this.setCurrentUser(user);
         return user;
       }
     } catch (error) {
-      if (error instanceof Error && error.message.includes('cancelled')) {
-        // User cancelled - not an error
-        return null;
+      if (error instanceof Error) {
+        if (error.message.includes('cancelled') || error.message.includes('User did not consent')) {
+          return null;
+        }
       }
-      vscode.window.showErrorMessage(`GitHub sign in failed: ${error}`);
+      vscode.window.showErrorMessage(
+        'GitHub re-authentication failed. Please try signing out and back in via VS Code\'s Accounts menu.'
+      );
     }
-
     return null;
   }
 
@@ -156,7 +203,17 @@ export class GitHubAuthService implements vscode.Disposable {
     });
 
     if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.status}`);
+      // Provide specific error messages for common status codes
+      switch (response.status) {
+        case 401:
+          throw new Error('GitHub API error: 401 - Token is invalid or expired');
+        case 403:
+          throw new Error('GitHub API error: 403 - Access forbidden (rate limit or permissions)');
+        case 404:
+          throw new Error('GitHub API error: 404 - User not found');
+        default:
+          throw new Error(`GitHub API error: ${response.status}`);
+      }
     }
 
     const data = await response.json() as {
