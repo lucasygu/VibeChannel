@@ -46,6 +46,8 @@ export class ChatPanel {
   private disposables: vscode.Disposable[] = [];
   private isReadOnly = false;
   private connectionMode: 'connected' | 'local-only' | 'offline' = 'connected';
+  private remoteDetected = false;
+  private remoteCheckInterval: NodeJS.Timeout | null = null;
 
   public static async createOrShow(
     repoPath: string,
@@ -281,6 +283,9 @@ export class ChatPanel {
     // Start sync service
     this.syncService.start();
 
+    // Start remote detection if in local-only mode
+    this.startRemoteDetection();
+
     // Listen for sync events
     this.disposables.push(
       this.syncService.onSync(async (event) => {
@@ -350,6 +355,38 @@ export class ChatPanel {
       }
     );
     this.watcher.start();
+  }
+
+  /**
+   * Start periodic check for remote availability in local-only mode
+   * When remote is detected, update the banner to prompt user to connect
+   */
+  private startRemoteDetection(): void {
+    if (this.connectionMode !== 'local-only') return;
+    if (this.remoteCheckInterval) return;
+
+    console.log('ChatPanel: Starting remote detection for local-only mode');
+
+    // Check every 5 seconds
+    this.remoteCheckInterval = setInterval(async () => {
+      if (this.remoteDetected) return; // Already detected, stop checking
+
+      const hasRemote = this.gitService.hasRemote();
+      if (hasRemote) {
+        console.log('ChatPanel: Remote detected in local-only mode');
+        this.remoteDetected = true;
+        this.stopRemoteDetection();
+        // Update just the banner via postMessage
+        this.panel.webview.postMessage({ type: 'remoteDetected' });
+      }
+    }, 5000);
+  }
+
+  private stopRemoteDetection(): void {
+    if (this.remoteCheckInterval) {
+      clearInterval(this.remoteCheckInterval);
+      this.remoteCheckInterval = null;
+    }
   }
 
   private handleFileChange(event: WatcherEvent, filepath: string): void {
@@ -474,7 +511,53 @@ export class ChatPanel {
           }
         }
         break;
+      case 'upgradeConnection':
+        this.upgradeToConnectedMode();
+        break;
     }
+  }
+
+  /**
+   * Upgrade from local-only mode to connected mode after remote is detected
+   */
+  private async upgradeToConnectedMode(): Promise<void> {
+    // Validate the remote connection
+    const remoteResult = await this.gitService.validateRemote(this.repoPath);
+
+    if (!remoteResult.hasRemote) {
+      vscode.window.showWarningMessage('No remote repository found. Please add a remote first.');
+      return;
+    }
+
+    if (!remoteResult.isReachable) {
+      // Show specific error based on the issue
+      let errorMsg = 'Cannot connect to remote repository.';
+      switch (remoteResult.error) {
+        case 'auth-failed':
+          errorMsg = 'Authentication failed. Please sign in with GitHub.';
+          break;
+        case 'repo-not-found':
+          errorMsg = 'Remote repository not found. Please check the URL.';
+          break;
+        case 'network-error':
+          errorMsg = 'Network error. Please check your connection.';
+          break;
+      }
+      vscode.window.showWarningMessage(errorMsg);
+      return;
+    }
+
+    // Successfully connected - upgrade the mode
+    this.connectionMode = 'connected';
+    this.remoteDetected = false;
+
+    // Notify webview to remove the banner
+    this.panel.webview.postMessage({ type: 'connectionUpgraded' });
+
+    // Force a sync to pull any existing messages from remote
+    await this.syncService.forceSync();
+
+    vscode.window.showInformationMessage('Connected to remote repository! Messages will now sync automatically.');
   }
 
   private switchChannel(channelName: string): void {
@@ -966,7 +1049,19 @@ date: ${isoTimestamp}`;
 
     switch (this.connectionMode) {
       case 'local-only':
-        return `<div class="connection-banner connection-banner-info">
+        if (this.remoteDetected) {
+          // Remote was added while in local-only mode - prompt to connect
+          return `<div class="connection-banner connection-banner-success" id="connectionBanner">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+            <span>
+              <strong>Remote detected!</strong> A remote repository has been configured.
+            </span>
+            <button class="connection-banner-btn" id="connectBtn">Connect Now</button>
+          </div>`;
+        }
+        return `<div class="connection-banner connection-banner-info" id="connectionBanner">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
             <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h16v12zM6 10h2v2H6zm0 4h8v2H6zm10 0h2v2h-2zm-6-4h8v2h-8z"/>
           </svg>
@@ -1512,6 +1607,30 @@ date: ${isoTimestamp}`;
         background-color: var(--vscode-inputValidation-infoBackground, #063b49);
         border: 1px solid var(--vscode-inputValidation-infoBorder, #007acc);
         color: var(--vscode-inputValidation-infoForeground, #ffffff);
+      }
+
+      .connection-banner-success {
+        background-color: var(--vscode-testing-iconPassed, #73c991);
+        background-color: rgba(115, 201, 145, 0.2);
+        border: 1px solid var(--vscode-testing-iconPassed, #73c991);
+        color: var(--vscode-foreground);
+      }
+
+      .connection-banner-btn {
+        margin-left: auto;
+        padding: 4px 12px;
+        background-color: var(--vscode-button-background, #0e639c);
+        color: var(--vscode-button-foreground, #ffffff);
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+
+      .connection-banner-btn:hover {
+        background-color: var(--vscode-button-hoverBackground, #1177bb);
       }
 
       .connection-banner a {
@@ -2743,6 +2862,34 @@ date: ${isoTimestamp}`;
               renderAttachmentChips();
             }
           }
+        } else if (message.type === 'remoteDetected') {
+          // Remote was detected - update the banner to show connect option
+          const banner = document.getElementById('connectionBanner');
+          if (banner) {
+            banner.className = 'connection-banner connection-banner-success';
+            banner.innerHTML = \`
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+              </svg>
+              <span>
+                <strong>Remote detected!</strong> A remote repository has been configured.
+              </span>
+              <button class="connection-banner-btn" id="connectBtn">Connect Now</button>
+            \`;
+            // Add click handler for the new button
+            const connectBtn = document.getElementById('connectBtn');
+            if (connectBtn) {
+              connectBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'upgradeConnection' });
+              });
+            }
+          }
+        } else if (message.type === 'connectionUpgraded') {
+          // Connection was upgraded - remove the banner
+          const banner = document.getElementById('connectionBanner');
+          if (banner) {
+            banner.remove();
+          }
         }
       });
 
@@ -3100,6 +3247,7 @@ date: ${isoTimestamp}`;
     ChatPanel.currentPanel = undefined;
 
     this.watcher?.dispose();
+    this.stopRemoteDetection();
     this.panel.dispose();
 
     while (this.disposables.length) {
