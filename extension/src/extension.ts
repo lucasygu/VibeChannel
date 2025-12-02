@@ -39,10 +39,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
       // Check if this is a git repository
       if (!isGitRepo(workspacePath)) {
-        vscode.window.showErrorMessage(
-          'VibeChannel requires a Git repository. Initialize git first with "git init".'
+        const action = await vscode.window.showInformationMessage(
+          'VibeChannel requires a Git repository. Would you like to initialize one?',
+          'Initialize Git',
+          'Cancel'
         );
-        return;
+
+        if (action === 'Initialize Git') {
+          try {
+            execSync('git init', { cwd: workspacePath, stdio: 'pipe' });
+            vscode.window.showInformationMessage('Git repository initialized successfully!');
+          } catch (error) {
+            vscode.window.showErrorMessage('Failed to initialize Git repository.');
+            return;
+          }
+        } else {
+          return;
+        }
       }
 
       // Check if vibechannel branch exists, if not ask to initialize
