@@ -27,6 +27,13 @@ export interface AccessCheckResult {
   reason?: 'no-remote' | 'no-permission' | 'unknown';
 }
 
+export interface RemoteValidationResult {
+  hasRemote: boolean;
+  isReachable: boolean;
+  error?: 'no-remote' | 'repo-not-found' | 'auth-failed' | 'network-error' | 'invalid-url';
+  remoteUrl?: string;
+}
+
 export interface InitResult {
   success: boolean;
   readOnly: boolean;
@@ -172,6 +179,74 @@ export class GitService {
       return result.trim();
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Validate that the remote is configured and reachable.
+   * Uses `git ls-remote` which is fast and doesn't require write access.
+   */
+  async validateRemote(repoPath?: string): Promise<RemoteValidationResult> {
+    const cwd = repoPath || this.config?.repoPath;
+    if (!cwd) {
+      return { hasRemote: false, isReachable: false, error: 'no-remote' };
+    }
+
+    // Check if origin remote exists
+    let remoteUrl: string | undefined;
+    try {
+      const remotes = execSync('git remote', { cwd, encoding: 'utf-8' });
+      if (!remotes.includes('origin')) {
+        return { hasRemote: false, isReachable: false, error: 'no-remote' };
+      }
+      remoteUrl = execSync('git remote get-url origin', { cwd, encoding: 'utf-8' }).trim();
+    } catch {
+      return { hasRemote: false, isReachable: false, error: 'no-remote' };
+    }
+
+    // Validate URL format
+    if (!remoteUrl || (!remoteUrl.includes('github.com') && !remoteUrl.includes('gitlab.com') && !remoteUrl.includes('bitbucket.org') && !remoteUrl.startsWith('git@') && !remoteUrl.startsWith('https://'))) {
+      // Allow any URL that looks like a git remote
+      if (!remoteUrl || (!remoteUrl.includes('.git') && !remoteUrl.includes('git@') && !remoteUrl.startsWith('https://') && !remoteUrl.startsWith('http://'))) {
+        return { hasRemote: true, isReachable: false, error: 'invalid-url', remoteUrl };
+      }
+    }
+
+    // Test if remote is reachable with ls-remote (fast, read-only)
+    try {
+      await execAsync('git ls-remote --exit-code origin HEAD', { cwd, timeout: 15000 });
+      return { hasRemote: true, isReachable: true, remoteUrl };
+    } catch (error) {
+      const errorStr = String(error);
+      console.log('GitService: validateRemote error:', errorStr);
+
+      // Categorize the error
+      if (errorStr.includes('Repository not found') ||
+          errorStr.includes('not found') ||
+          errorStr.includes('does not exist') ||
+          errorStr.includes('Could not read from remote')) {
+        return { hasRemote: true, isReachable: false, error: 'repo-not-found', remoteUrl };
+      }
+
+      if (errorStr.includes('Authentication failed') ||
+          errorStr.includes('Invalid username or password') ||
+          errorStr.includes('403') ||
+          errorStr.includes('401') ||
+          errorStr.includes('Permission denied') ||
+          errorStr.includes('permission denied')) {
+        return { hasRemote: true, isReachable: false, error: 'auth-failed', remoteUrl };
+      }
+
+      if (errorStr.includes('Could not resolve host') ||
+          errorStr.includes('unable to access') ||
+          errorStr.includes('Connection refused') ||
+          errorStr.includes('Connection timed out') ||
+          errorStr.includes('Network is unreachable')) {
+        return { hasRemote: true, isReachable: false, error: 'network-error', remoteUrl };
+      }
+
+      // Unknown error - treat as network issue
+      return { hasRemote: true, isReachable: false, error: 'network-error', remoteUrl };
     }
   }
 

@@ -45,15 +45,21 @@ export class ChatPanel {
   private watcher: FolderWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
   private isReadOnly = false;
+  private connectionMode: 'connected' | 'local-only' | 'offline' = 'connected';
 
-  public static async createOrShow(repoPath: string): Promise<void> {
+  public static async createOrShow(
+    repoPath: string,
+    connectionMode: 'connected' | 'local-only' | 'offline' = 'connected'
+  ): Promise<void> {
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
 
     // If we already have a panel for this repo, show it
     if (ChatPanel.currentPanel && ChatPanel.currentPanel.repoPath === repoPath) {
+      ChatPanel.currentPanel.connectionMode = connectionMode;
       ChatPanel.currentPanel.panel.reveal(column);
+      ChatPanel.currentPanel.update();
       return;
     }
 
@@ -124,7 +130,7 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, repoPath, gitService, syncService, channels, defaultChannel, conversation);
+    ChatPanel.currentPanel = new ChatPanel(panel, repoPath, gitService, syncService, channels, defaultChannel, conversation, connectionMode);
   }
 
   /**
@@ -244,7 +250,8 @@ export class ChatPanel {
     syncService: SyncService,
     channels: string[],
     currentChannel: string,
-    conversation: Conversation
+    conversation: Conversation,
+    connectionMode: 'connected' | 'local-only' | 'offline' = 'connected'
   ) {
     this.panel = panel;
     this.repoPath = repoPath;
@@ -254,6 +261,7 @@ export class ChatPanel {
     this.channels = channels;
     this.currentChannel = currentChannel;
     this.conversation = conversation;
+    this.connectionMode = connectionMode;
 
     // Initialize notification tracking for current channel
     this.notificationService.initializeChannel(currentChannel, conversation.messages);
@@ -862,17 +870,7 @@ date: ${isoTimestamp}`;
         <span class="message-count">${this.conversation.messages.length} messages</span>
       </header>
 
-      ${this.isReadOnly ? `
-      <div class="read-only-banner">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-        </svg>
-        <span>
-          <strong>Read-only mode:</strong> You don't have write access to this repository.
-          <a href="https://github.com/lucasygu/VibeChannel#permissions">Learn more</a>
-        </span>
-      </div>
-      ` : ''}
+      ${this.renderConnectionBanner()}
 
       <div class="messages-container" id="messagesContainer">
         ${this.renderMessages(timestampDisplay === 'relative')}
@@ -951,6 +949,47 @@ date: ${isoTimestamp}`;
 
   private renderSidebarSignIn(): string {
     return `<button class="sidebar-sign-in" id="sidebarSignInBtn">Sign in</button>`;
+  }
+
+  private renderConnectionBanner(): string {
+    // Read-only mode takes precedence
+    if (this.isReadOnly) {
+      return `<div class="connection-banner connection-banner-warning">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <span>
+          <strong>Read-only mode:</strong> You don't have write access to this repository.
+        </span>
+      </div>`;
+    }
+
+    switch (this.connectionMode) {
+      case 'local-only':
+        return `<div class="connection-banner connection-banner-info">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h16v12zM6 10h2v2H6zm0 4h8v2H6zm10 0h2v2h-2zm-6-4h8v2h-8z"/>
+          </svg>
+          <span>
+            <strong>Local-only mode:</strong> No remote repository configured. Messages are stored locally only.
+          </span>
+        </div>`;
+
+      case 'offline':
+        return `<div class="connection-banner connection-banner-warning">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M24 8.98C20.93 5.9 16.69 4 12 4S3.07 5.9 0 8.98L12 21 24 8.98zM2.92 9.07C5.51 7.08 8.67 6 12 6s6.49 1.08 9.08 3.07l-1.43 1.43C17.5 8.94 14.86 8 12 8s-5.5.94-7.65 2.51L2.92 9.07zM12 18.17l-7.07-7.07C6.94 9.54 9.38 8.5 12 8.5s5.06 1.04 7.07 2.6L12 18.17z"/>
+            <path d="M12 4C7.31 4 3.07 5.9 0 8.98L1.42 10.4C4.02 7.8 7.87 6 12 6s7.98 1.8 10.58 4.4l1.42-1.42C20.93 5.9 16.69 4 12 4z" opacity="0.3"/>
+            <line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <span>
+            <strong>Offline mode:</strong> Cannot connect to remote. Messages will sync when connection is restored.
+          </span>
+        </div>`;
+
+      default:
+        return ''; // Connected - no banner
+    }
   }
 
   private renderMessages(relativeTime: boolean): string {
@@ -1451,6 +1490,40 @@ date: ${isoTimestamp}`;
         color: var(--vscode-descriptionForeground, #8c8c8c);
       }
 
+      .connection-banner {
+        padding: 10px 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.85em;
+      }
+
+      .connection-banner svg {
+        flex-shrink: 0;
+      }
+
+      .connection-banner-warning {
+        background-color: var(--vscode-inputValidation-warningBackground, #5a4a00);
+        border: 1px solid var(--vscode-inputValidation-warningBorder, #856d00);
+        color: var(--vscode-inputValidation-warningForeground, #ffffff);
+      }
+
+      .connection-banner-info {
+        background-color: var(--vscode-inputValidation-infoBackground, #063b49);
+        border: 1px solid var(--vscode-inputValidation-infoBorder, #007acc);
+        color: var(--vscode-inputValidation-infoForeground, #ffffff);
+      }
+
+      .connection-banner a {
+        color: var(--vscode-textLink-foreground, #3794ff);
+        text-decoration: none;
+      }
+
+      .connection-banner a:hover {
+        text-decoration: underline;
+      }
+
+      /* Legacy support */
       .read-only-banner {
         background-color: var(--vscode-inputValidation-warningBackground, #5a4a00);
         border: 1px solid var(--vscode-inputValidation-warningBorder, #856d00);

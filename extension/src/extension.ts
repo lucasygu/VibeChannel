@@ -58,13 +58,86 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       }
 
-      // Check if vibechannel branch exists, if not ask to initialize
+      // Validate remote connection
       const gitService = GitService.getInstance();
+      const remoteResult = await gitService.validateRemote(workspacePath);
+
+      let connectionMode: 'connected' | 'local-only' | 'offline' = 'connected';
+
+      if (!remoteResult.hasRemote) {
+        // No remote configured - ask user what to do
+        const action = await vscode.window.showInformationMessage(
+          'No remote repository configured. VibeChannel can work in local-only mode, but messages won\'t sync to a remote server.',
+          'Continue (Local Only)',
+          'Cancel'
+        );
+        if (action !== 'Continue (Local Only)') {
+          return;
+        }
+        connectionMode = 'local-only';
+      } else if (!remoteResult.isReachable) {
+        // Remote exists but not reachable - show specific error
+        let message: string;
+        let options: string[];
+
+        switch (remoteResult.error) {
+          case 'repo-not-found':
+            message = `Remote repository not found: ${remoteResult.remoteUrl}\n\nThe repository may have been deleted or you don't have access.`;
+            options = ['Continue Offline', 'Cancel'];
+            break;
+          case 'auth-failed':
+            message = `Authentication failed for: ${remoteResult.remoteUrl}\n\nPlease check your credentials or sign in with GitHub.`;
+            options = ['Sign In', 'Continue Offline', 'Cancel'];
+            break;
+          case 'network-error':
+            message = `Cannot reach remote: ${remoteResult.remoteUrl}\n\nPlease check your network connection.`;
+            options = ['Continue Offline', 'Retry', 'Cancel'];
+            break;
+          case 'invalid-url':
+            message = `Invalid remote URL: ${remoteResult.remoteUrl}`;
+            options = ['Continue Offline', 'Cancel'];
+            break;
+          default:
+            message = `Cannot connect to remote: ${remoteResult.remoteUrl}`;
+            options = ['Continue Offline', 'Cancel'];
+        }
+
+        const action = await vscode.window.showWarningMessage(message, ...options);
+
+        if (action === 'Cancel' || !action) {
+          return;
+        } else if (action === 'Sign In') {
+          await vscode.commands.executeCommand('vibechannel.signIn');
+          // Retry after sign in
+          const retryResult = await gitService.validateRemote(workspacePath);
+          if (!retryResult.isReachable) {
+            vscode.window.showErrorMessage('Still unable to connect after signing in. Continuing in offline mode.');
+            connectionMode = 'offline';
+          }
+        } else if (action === 'Retry') {
+          const retryResult = await gitService.validateRemote(workspacePath);
+          if (!retryResult.isReachable) {
+            vscode.window.showWarningMessage('Still unable to connect. Continuing in offline mode.');
+            connectionMode = 'offline';
+          }
+        } else {
+          connectionMode = 'offline';
+        }
+      }
+
+      // Check if vibechannel branch exists, if not ask to initialize
       const isInitialized = gitService.isInitialized();
 
       if (!isInitialized) {
+        let initMessage = 'VibeChannel is not set up in this repository. Would you like to initialize it?';
+        if (connectionMode === 'local-only') {
+          initMessage = 'Initialize VibeChannel in local-only mode? Messages will be stored locally but not synced.';
+        } else if (connectionMode === 'offline') {
+          initMessage = 'Initialize VibeChannel in offline mode? You can sync when connection is restored.';
+        }
+
         const action = await vscode.window.showInformationMessage(
-          'VibeChannel is not set up in this repository. Would you like to initialize it?',
+          initMessage,
           'Initialize',
           'Cancel'
         );
@@ -75,7 +148,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       // Open the chat panel (this will initialize if needed)
-      await ChatPanel.createOrShow(workspacePath);
+      await ChatPanel.createOrShow(workspacePath, connectionMode);
       updateStatusBar();
     }
   );
