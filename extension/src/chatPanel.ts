@@ -1027,6 +1027,21 @@ date: ${isoTimestamp}`;
     return `<div class="sidebar-user">
       <img class="sidebar-avatar" src="${this.escapeHtml(user.avatarUrl)}" alt="${this.escapeHtml(user.login)}" />
       <span class="sidebar-username">${this.escapeHtml(user.login)}</span>
+      <div class="sidebar-settings">
+        <button class="sidebar-settings-btn" id="settingsBtn" title="Settings">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+          </svg>
+        </button>
+        <div class="sidebar-settings-dropdown" id="settingsDropdown">
+          <button class="sidebar-settings-item" id="signOutMenuItem">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
+            </svg>
+            Sign Out
+          </button>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -1477,6 +1492,70 @@ date: ${isoTimestamp}`;
       .sidebar-username {
         font-size: 0.85em;
         color: var(--vscode-foreground, #cccccc);
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sidebar-settings {
+        position: relative;
+        margin-left: auto;
+      }
+
+      .sidebar-settings-btn {
+        background: transparent;
+        border: none;
+        padding: 4px;
+        cursor: pointer;
+        color: var(--vscode-foreground, #cccccc);
+        opacity: 0.6;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .sidebar-settings-btn:hover {
+        opacity: 1;
+        background-color: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.1));
+      }
+
+      .sidebar-settings-dropdown {
+        display: none;
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+        background-color: var(--vscode-menu-background, #252526);
+        border: 1px solid var(--vscode-menu-border, #454545);
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        min-width: 120px;
+        z-index: 1000;
+      }
+
+      .sidebar-settings-dropdown.open {
+        display: block;
+      }
+
+      .sidebar-settings-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 8px 12px;
+        background: transparent;
+        border: none;
+        color: var(--vscode-menu-foreground, #cccccc);
+        font-size: 13px;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .sidebar-settings-item:hover {
+        background-color: var(--vscode-menu-selectionBackground, #094771);
+        color: var(--vscode-menu-selectionForeground, #ffffff);
       }
 
       .sidebar-sign-in {
@@ -2772,6 +2851,33 @@ date: ${isoTimestamp}`;
       if (sidebarSignInBtn) {
         sidebarSignInBtn.addEventListener('click', () => {
           vscode.postMessage({ type: 'signIn' });
+        });
+      }
+
+      // Handle settings button and dropdown
+      const settingsBtn = document.getElementById('settingsBtn');
+      const settingsDropdown = document.getElementById('settingsDropdown');
+      if (settingsBtn && settingsDropdown) {
+        settingsBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          settingsDropdown.classList.toggle('open');
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+          if (!settingsBtn.contains(e.target) && !settingsDropdown.contains(e.target)) {
+            settingsDropdown.classList.remove('open');
+          }
+        });
+      }
+
+      // Handle sign out from settings menu
+      const signOutMenuItem = document.getElementById('signOutMenuItem');
+      if (signOutMenuItem) {
+        signOutMenuItem.addEventListener('click', () => {
+          const dropdown = document.getElementById('settingsDropdown');
+          if (dropdown) dropdown.classList.remove('open');
+          vscode.postMessage({ type: 'signOut' });
         });
       }
 
