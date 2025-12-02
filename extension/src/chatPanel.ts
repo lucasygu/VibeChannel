@@ -494,6 +494,11 @@ export class ChatPanel {
           this.createGitHubIssue(message.payload);
         }
         break;
+      case 'openUrl':
+        if (typeof message.payload === 'string') {
+          vscode.env.openExternal(vscode.Uri.parse(message.payload));
+        }
+        break;
       case 'editMessage':
         if (message.payload && typeof message.payload === 'object') {
           const { filename, content, files, images, attachments } = message.payload as {
@@ -1302,7 +1307,7 @@ date: ${isoTimestamp}`;
       <svg viewBox="0 0 16 16" width="14" height="14">
         <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
       </svg>
-      <span>Create GitHub Issue</span>
+      <span id="contextIssueText">Create GitHub Issue</span>
     </div>
   </div>
 
@@ -1455,8 +1460,9 @@ date: ${isoTimestamp}`;
     const imagesData = this.escapeHtml(JSON.stringify(message.images || []));
     const attachmentsData = this.escapeHtml(JSON.stringify(message.attachments || []));
     const hasIssue = message.githubIssue ? 'true' : 'false';
+    const issueUrl = message.githubIssue ? this.escapeHtml(message.githubIssue) : '';
 
-    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}" data-content="${this.escapeHtml(message.content)}" data-files="${filesData}" data-images="${imagesData}" data-attachments="${attachmentsData}" data-has-issue="${hasIssue}">
+    return `<div class="message ${colorClass}" data-filename="${this.escapeHtml(message.filename)}" data-sender="${this.escapeHtml(message.from)}" data-content="${this.escapeHtml(message.content)}" data-files="${filesData}" data-images="${imagesData}" data-attachments="${attachmentsData}" data-has-issue="${hasIssue}" data-issue-url="${issueUrl}">
       <div class="message-header">
         <span class="sender">${this.escapeHtml(message.from)}</span>
         <span class="timestamp" title="${message.date.toISOString()}">${timestamp}</span>
@@ -2883,13 +2889,30 @@ date: ${isoTimestamp}`;
           contextDelete.classList.add('hidden');
         }
 
-        // Show/hide create issue option (only for owner, only if no issue yet)
-        if (isOwner && !hasIssue && contextCreateIssue && contextIssueSeparator) {
-          contextCreateIssue.classList.remove('hidden');
-          contextIssueSeparator.classList.remove('hidden');
-        } else if (contextCreateIssue && contextIssueSeparator) {
-          contextCreateIssue.classList.add('hidden');
-          contextIssueSeparator.classList.add('hidden');
+        // Show/hide issue option
+        // - Show "Create GitHub Issue" if owner and no issue yet
+        // - Show "Go to GitHub Issue" if message already has an issue (for anyone)
+        const contextIssueText = document.getElementById('contextIssueText');
+        if (contextCreateIssue && contextIssueSeparator) {
+          if (hasIssue) {
+            // Message has issue - show "Go to GitHub Issue" for everyone
+            contextCreateIssue.classList.remove('hidden');
+            contextIssueSeparator.classList.remove('hidden');
+            if (contextIssueText) {
+              contextIssueText.textContent = 'Go to GitHub Issue';
+            }
+          } else if (isOwner) {
+            // No issue, owner - show "Create GitHub Issue"
+            contextCreateIssue.classList.remove('hidden');
+            contextIssueSeparator.classList.remove('hidden');
+            if (contextIssueText) {
+              contextIssueText.textContent = 'Create GitHub Issue';
+            }
+          } else {
+            // No issue, not owner - hide the option
+            contextCreateIssue.classList.add('hidden');
+            contextIssueSeparator.classList.add('hidden');
+          }
         }
 
         // Position the menu
@@ -2990,7 +3013,13 @@ date: ${isoTimestamp}`;
             const filename = contextTargetMessage.getAttribute('data-filename');
             const sender = contextTargetMessage.getAttribute('data-sender');
             const hasIssue = contextTargetMessage.getAttribute('data-has-issue') === 'true';
-            if (filename && sender === currentUser && !hasIssue) {
+            const issueUrl = contextTargetMessage.getAttribute('data-issue-url');
+
+            if (hasIssue && issueUrl) {
+              // Open existing issue in browser
+              vscode.postMessage({ type: 'openUrl', payload: issueUrl });
+            } else if (filename && sender === currentUser && !hasIssue) {
+              // Create new issue
               vscode.postMessage({ type: 'createGitHubIssue', payload: filename });
             }
           }
