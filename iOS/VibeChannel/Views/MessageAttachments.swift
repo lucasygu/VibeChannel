@@ -11,11 +11,13 @@ import SwiftUI
 
 struct MessageImagesView: View {
     let images: [String]
+    let owner: String
+    let repo: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(images, id: \.self) { imagePath in
-                MessageImageView(path: imagePath)
+                MessageImageView(path: imagePath, owner: owner, repo: repo)
             }
         }
         .padding(.top, 4)
@@ -24,42 +26,128 @@ struct MessageImagesView: View {
 
 struct MessageImageView: View {
     let path: String
+    let owner: String
+    let repo: String
     @State private var showFullScreen = false
 
+    /// Construct the raw.githubusercontent.com URL for the image
+    private var imageURL: URL? {
+        // path is like ".assets/20250115T103045-a3f8c2.png"
+        let urlString = "https://raw.githubusercontent.com/\(owner)/\(repo)/vibechannel/\(path)"
+        return URL(string: urlString)
+    }
+
     var body: some View {
-        // For now, show a placeholder - actual image loading would require
-        // fetching from GitHub's raw content URL
-        Button(action: { showFullScreen = true }) {
-            HStack(spacing: 8) {
-                Image(systemName: "photo")
-                    .font(.title2)
-                    .foregroundStyle(.blue)
+        VStack(alignment: .leading, spacing: 4) {
+            if let url = imageURL {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        // Loading state
+                        HStack {
+                            ProgressView()
+                                .frame(width: 20, height: 20)
+                            Text("Loading image...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(filename(from: path))
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                    case .success(let image):
+                        // Successfully loaded image
+                        Button(action: { showFullScreen = true }) {
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxWidth: 300, maxHeight: 300)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                        .fullScreenCover(isPresented: $showFullScreen) {
+                            FullScreenImageView(image: image, filename: filename(from: path))
+                        }
 
-                    Text(path)
+                    case .failure:
+                        // Failed to load - show placeholder with link
+                        Button(action: { showFullScreen = true }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "photo")
+                                    .font(.title2)
+                                    .foregroundStyle(.orange)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(filename(from: path))
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+
+                                    Text("Failed to load image")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "arrow.up.right.square")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(12)
+                            .background(Color(.systemGray6))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+            } else {
+                // Invalid URL - show placeholder
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.title2)
+                        .foregroundStyle(.red)
+
+                    Text("Invalid image path: \(path)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
-
-                Spacer()
-
-                Image(systemName: "arrow.up.right.square")
-                    .foregroundStyle(.secondary)
+                .padding(12)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-            .padding(12)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
     }
 
     private func filename(from path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+}
+
+// MARK: - Full Screen Image View
+
+struct FullScreenImageView: View {
+    let image: Image
+    let filename: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            image
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .navigationTitle(filename)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            dismiss()
+                        }
+                    }
+                }
+        }
     }
 }
 
@@ -199,10 +287,14 @@ struct FileReferenceRow: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Images")
                 .font(.headline)
-            MessageImagesView(images: [
-                ".assets/screenshot-001.png",
-                ".assets/diagram.jpg"
-            ])
+            MessageImagesView(
+                images: [
+                    ".assets/screenshot-001.png",
+                    ".assets/diagram.jpg"
+                ],
+                owner: "lucasygu",
+                repo: "VibeChannel"
+            )
 
             Divider()
 

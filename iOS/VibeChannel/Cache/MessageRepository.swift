@@ -450,6 +450,7 @@ class MessageRepository {
             existing.rawContent = message.rawContent
             existing.edited = message.edited
             existing.sha = message.sha
+            existing.githubIssue = message.githubIssue
             try context.save()
         }
     }
@@ -493,5 +494,119 @@ class MessageRepository {
     func getRateLimitInfo() -> RateLimitInfo? {
         guard let context = modelContext else { return nil }
         return try? context.fetch(FetchDescriptor<RateLimitInfo>()).first
+    }
+
+    // MARK: - GitHub Issue Operations
+
+    /// Create a GitHub issue
+    func createGitHubIssue(
+        owner: String,
+        repo: String,
+        title: String,
+        body: String
+    ) async throws -> GitHubIssueResponse {
+        guard let api = api else { throw GitHubAPIError.unauthorized }
+        return try await api.createIssue(owner: owner, repo: repo, title: title, body: body)
+    }
+
+    /// Update a message to include a github_issue link
+    func updateMessageWithIssue(
+        owner: String,
+        repo: String,
+        channel: String,
+        message: Message,
+        issueUrl: String
+    ) async throws -> Message {
+        guard let api = api,
+              let sha = message.sha else {
+            throw GitHubAPIError.unauthorized
+        }
+
+        // Rebuild the frontmatter with github_issue field
+        let iso8601 = ISO8601DateFormatter()
+        iso8601.formatOptions = [.withInternetDateTime]
+
+        var frontmatter = """
+        ---
+        from: \(message.from)
+        date: \(iso8601.string(from: message.date))
+        """
+
+        if let replyTo = message.replyTo {
+            frontmatter += "\nreply_to: \(replyTo)"
+        }
+
+        if let tags = message.tags, !tags.isEmpty {
+            frontmatter += "\ntags: [\(tags.joined(separator: ", "))]"
+        }
+
+        if let edited = message.edited {
+            frontmatter += "\nedited: \(iso8601.string(from: edited))"
+        }
+
+        // Add files array if present
+        if let files = message.files, !files.isEmpty {
+            frontmatter += "\nfiles:"
+            for file in files {
+                frontmatter += "\n  - \(file)"
+            }
+        }
+
+        // Add images array if present
+        if let images = message.images, !images.isEmpty {
+            frontmatter += "\nimages:"
+            for image in images {
+                frontmatter += "\n  - \(image)"
+            }
+        }
+
+        // Add attachments array if present
+        if let attachments = message.attachments, !attachments.isEmpty {
+            frontmatter += "\nattachments:"
+            for attachment in attachments {
+                frontmatter += "\n  - \(attachment)"
+            }
+        }
+
+        // Add the github_issue field
+        frontmatter += "\ngithub_issue: \(issueUrl)"
+
+        frontmatter += "\n---\n\n"
+
+        let updatedRaw = frontmatter + message.content
+
+        // Update on remote
+        let response = try await api.updateFile(
+            owner: owner,
+            repo: repo,
+            path: "\(channel)/\(message.filename)",
+            content: updatedRaw,
+            sha: sha,
+            message: "Link message to GitHub issue"
+        )
+
+        // Create updated message
+        let updatedMessage = Message(
+            id: message.id,
+            filename: message.filename,
+            from: message.from,
+            date: message.date,
+            replyTo: message.replyTo,
+            tags: message.tags,
+            edited: message.edited,
+            content: message.content,
+            rawContent: updatedRaw,
+            sha: response.content.sha,
+            files: message.files,
+            images: message.images,
+            attachments: message.attachments,
+            githubIssue: issueUrl
+        )
+
+        // Update cache
+        let channelId = "\(owner)/\(repo)/\(channel)"
+        try await updateMessageInCache(updatedMessage, channelId: channelId)
+
+        return updatedMessage
     }
 }

@@ -62,6 +62,10 @@ class MessageParser {
         let replyTo = yaml["reply_to"]
         let edited: Date? = yaml["edited"].flatMap { parseDate($0) }
         let tags: [String]? = parseTags(yaml["tags"])
+        let githubIssue = yaml["github_issue"]
+
+        // Parse attachment fields (images, files, attachments)
+        let (files, images, attachments) = parseAttachmentFields(yamlString)
 
         let id = filename.replacingOccurrences(of: ".md", with: "")
 
@@ -75,7 +79,11 @@ class MessageParser {
             edited: edited,
             content: markdownContent,
             rawContent: content,
-            sha: sha
+            sha: sha,
+            files: files,
+            images: images,
+            attachments: attachments,
+            githubIssue: githubIssue
         ))
     }
 
@@ -153,6 +161,90 @@ class MessageParser {
             .components(separatedBy: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    // MARK: - Attachment Fields Parsing
+
+    /// Parse files, images, and attachments from YAML frontmatter.
+    /// Supports both inline format `[item1, item2]` and multi-line YAML arrays:
+    /// ```yaml
+    /// images:
+    ///   - .assets/image1.png
+    ///   - .assets/image2.png
+    /// ```
+    private static func parseAttachmentFields(_ yaml: String) -> (files: [String]?, images: [String]?, attachments: [String]?) {
+        let files = parseYAMLArray(yaml, key: "files")
+        let images = parseYAMLArray(yaml, key: "images")
+        let attachments = parseYAMLArray(yaml, key: "attachments")
+
+        return (
+            files: files?.isEmpty == true ? nil : files,
+            images: images?.isEmpty == true ? nil : images,
+            attachments: attachments?.isEmpty == true ? nil : attachments
+        )
+    }
+
+    /// Parse a YAML array field that can be in two formats:
+    /// 1. Inline: `key: [item1, item2]`
+    /// 2. Multi-line:
+    ///    ```
+    ///    key:
+    ///      - item1
+    ///      - item2
+    ///    ```
+    private static func parseYAMLArray(_ yaml: String, key: String) -> [String]? {
+        let lines = yaml.components(separatedBy: .newlines)
+
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Check if this line starts our key
+            if trimmed.hasPrefix("\(key):") {
+                let afterColon = String(trimmed.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+
+                // Check for inline array format: [item1, item2]
+                if afterColon.hasPrefix("[") && afterColon.hasSuffix("]") {
+                    let inner = String(afterColon.dropFirst().dropLast())
+                    return inner
+                        .components(separatedBy: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                }
+
+                // Check for single inline value (not an array)
+                if !afterColon.isEmpty && !afterColon.hasPrefix("[") {
+                    return [afterColon]
+                }
+
+                // Multi-line array format: collect subsequent lines starting with "  - "
+                var items: [String] = []
+                var nextIndex = index + 1
+
+                while nextIndex < lines.count {
+                    let nextLine = lines[nextIndex]
+                    let nextTrimmed = nextLine.trimmingCharacters(in: .whitespaces)
+
+                    // Check if it's an array item (starts with -)
+                    if nextTrimmed.hasPrefix("-") {
+                        let item = String(nextTrimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+                        if !item.isEmpty {
+                            items.append(item)
+                        }
+                        nextIndex += 1
+                    } else if nextTrimmed.isEmpty {
+                        // Skip empty lines
+                        nextIndex += 1
+                    } else {
+                        // Hit a new key or non-array content, stop
+                        break
+                    }
+                }
+
+                return items.isEmpty ? nil : items
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Filename Parsing

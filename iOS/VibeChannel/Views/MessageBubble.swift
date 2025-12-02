@@ -15,7 +15,12 @@ struct MessageBubble: View {
     var onDelete: (() -> Void)?
     var onCopy: (() -> Void)?
     var onTapParent: (() -> Void)?
+    var onCreateIssue: (() -> Void)?  // Create GitHub issue from this message
     var isHighlighted: Bool = false
+
+    // Repository info for loading images from raw.githubusercontent.com
+    var owner: String = ""
+    var repo: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -96,7 +101,7 @@ struct MessageBubble: View {
 
                 // Images (from .assets/)
                 if let images = message.images, !images.isEmpty {
-                    MessageImagesView(images: images)
+                    MessageImagesView(images: images, owner: owner, repo: repo)
                 }
 
                 // File attachments
@@ -123,6 +128,24 @@ struct MessageBubble: View {
                     }
                     .padding(.top, 4)
                 }
+
+                // GitHub Issue Link
+                if let issueUrl = message.githubIssue, let url = URL(string: issueUrl) {
+                    Link(destination: url) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "link.circle.fill")
+                                .font(.caption)
+                            Text("View Issue")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.purple)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.purple.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                    .padding(.top, 4)
+                }
             }
 
             Spacer(minLength: 0)
@@ -139,6 +162,20 @@ struct MessageBubble: View {
 
             Button(action: { onCopy?() }) {
                 Label("Copy", systemImage: "doc.on.doc")
+            }
+
+            // Only show "Create Issue" if no issue is linked yet and callback is provided
+            if message.githubIssue == nil, let createIssue = onCreateIssue {
+                Button(action: { createIssue() }) {
+                    Label("Create GitHub Issue", systemImage: "exclamationmark.bubble")
+                }
+            }
+
+            // Open existing issue in browser
+            if let issueUrl = message.githubIssue, let url = URL(string: issueUrl) {
+                Link(destination: url) {
+                    Label("View Issue", systemImage: "link")
+                }
             }
 
             if onEdit != nil {

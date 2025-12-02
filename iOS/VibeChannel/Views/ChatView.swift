@@ -44,7 +44,16 @@ struct ChatView: View {
                                             scrollToMessage(id: parentId, proxy: proxy)
                                         }
                                     },
-                                    isHighlighted: highlightedMessageId == message.id
+                                    onCreateIssue: canCreateIssue(message) ? {
+                                        Task {
+                                            if let issueUrl = await viewModel.createGitHubIssue(from: message) {
+                                                print("Created issue: \(issueUrl)")
+                                            }
+                                        }
+                                    } : nil,
+                                    isHighlighted: highlightedMessageId == message.id,
+                                    owner: viewModel.owner,
+                                    repo: viewModel.repo
                                 )
                                 .id(message.id)
                             }
@@ -138,6 +147,15 @@ struct ChatView: View {
         // Can only delete your own messages
         // TODO: Compare with current user when we have auth context
         return message.sha != nil && !message.isPending
+    }
+
+    private func canCreateIssue(_ message: Message) -> Bool {
+        // Can only create issues from your own messages that don't already have an issue
+        guard let currentUser = viewModel.currentUserLogin else { return false }
+        return message.from.lowercased() == currentUser.lowercased() &&
+               message.githubIssue == nil &&
+               message.sha != nil &&
+               !message.isPending
     }
 
     private func scrollToMessage(id: String, proxy: ScrollViewProxy) {

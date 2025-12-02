@@ -88,6 +88,9 @@ final class CachedMessage {
     var images: [String]?
     var attachments: [String]?
 
+    // GitHub issue link
+    var githubIssue: String?
+
     var channel: CachedChannel?
 
     init(
@@ -125,6 +128,7 @@ final class CachedMessage {
         self.files = message.files
         self.images = message.images
         self.attachments = message.attachments
+        self.githubIssue = message.githubIssue
     }
 
     /// Convert back to Message for UI consumption
@@ -142,7 +146,8 @@ final class CachedMessage {
             sha: sha,
             files: files,
             images: images,
-            attachments: attachments
+            attachments: attachments,
+            githubIssue: githubIssue
         )
     }
 }

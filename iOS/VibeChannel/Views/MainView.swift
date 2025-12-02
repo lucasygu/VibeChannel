@@ -99,6 +99,11 @@ class MainViewModel: ObservableObject {
         selectedRepository?.name ?? ""
     }
 
+    /// The current user's login (username)
+    var currentUserLogin: String? {
+        currentUser?.login
+    }
+
     func initialize(with user: GitHubUser?) async {
         guard let user = user else { return }
 
@@ -357,6 +362,84 @@ class MainViewModel: ObservableObject {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    // MARK: - GitHub Issue Creation
+
+    /// Create a GitHub issue from a message
+    /// - Parameter message: The message to create an issue from
+    /// - Returns: The URL of the created issue, or nil if failed
+    func createGitHubIssue(from message: Message) async -> String? {
+        guard let repo = selectedRepository,
+              let channel = selectedChannel else {
+            error = "No repository or channel selected"
+            return nil
+        }
+
+        // Build issue title (first line, truncated to 80 chars)
+        let firstLine = message.content.components(separatedBy: .newlines).first ?? "VibeChannel Message"
+        let title = firstLine.count > 80 ? String(firstLine.prefix(77)) + "..." : firstLine
+
+        // Build issue body with images/files/attachments
+        var issueBody = message.content
+
+        // Append images as markdown
+        if let images = message.images, !images.isEmpty {
+            issueBody += "\n\n---\n\n**Attached Images:**\n\n"
+            for imagePath in images {
+                let imageUrl = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.name)/vibechannel/\(imagePath)"
+                let filename = (imagePath as NSString).lastPathComponent
+                issueBody += "![\(filename)](\(imageUrl))\n\n"
+            }
+        }
+
+        // Append file references as links
+        if let files = message.files, !files.isEmpty {
+            issueBody += "\n\n---\n\n**Referenced Files:**\n\n"
+            for filePath in files {
+                let fileUrl = "https://github.com/\(repo.owner)/\(repo.name)/blob/HEAD/\(filePath)"
+                issueBody += "- [\(filePath)](\(fileUrl))\n"
+            }
+        }
+
+        // Append attachments as links
+        if let attachments = message.attachments, !attachments.isEmpty {
+            issueBody += "\n\n---\n\n**Attachments:**\n\n"
+            for attachmentPath in attachments {
+                let attachmentUrl = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.name)/vibechannel/\(attachmentPath)"
+                let filename = (attachmentPath as NSString).lastPathComponent
+                issueBody += "- [\(filename)](\(attachmentUrl))\n"
+            }
+        }
+
+        do {
+            // Create the issue via API
+            let issue = try await repository.createGitHubIssue(
+                owner: repo.owner,
+                repo: repo.name,
+                title: title,
+                body: issueBody
+            )
+
+            // Update the message file to add github_issue field
+            let updatedMessage = try await repository.updateMessageWithIssue(
+                owner: repo.owner,
+                repo: repo.name,
+                channel: channel.id,
+                message: message,
+                issueUrl: issue.htmlUrl
+            )
+
+            // Update in local messages
+            if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                messages[index] = updatedMessage
+            }
+
+            return issue.htmlUrl
+        } catch {
+            self.error = "Failed to create issue: \(error.localizedDescription)"
+            return nil
+        }
     }
 }
 

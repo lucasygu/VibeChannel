@@ -369,4 +369,56 @@ class GitHubAPIClient {
             branch: branch
         )
     }
+
+    // MARK: - GitHub Issues
+
+    /// Create a GitHub issue from a message
+    /// - Parameters:
+    ///   - owner: Repository owner
+    ///   - repo: Repository name
+    ///   - title: Issue title
+    ///   - body: Issue body (markdown)
+    /// - Returns: The created issue with html_url and number
+    func createIssue(
+        owner: String,
+        repo: String,
+        title: String,
+        body: String
+    ) async throws -> GitHubIssueResponse {
+        let requestBody: [String: Any] = [
+            "title": title,
+            "body": body
+        ]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            throw GitHubAPIError.encodingError
+        }
+
+        return try await request(
+            "/repos/\(owner)/\(repo)/issues",
+            method: "POST",
+            body: jsonData,
+            decodeAs: GitHubIssueResponse.self
+        )
+    }
+}
+
+// MARK: - GitHub Issue Response
+
+struct GitHubIssueResponse: Codable {
+    let id: Int
+    let number: Int
+    let htmlUrl: String
+    let title: String
+    let body: String?
+    let state: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case number
+        case htmlUrl = "html_url"
+        case title
+        case body
+        case state
+    }
 }

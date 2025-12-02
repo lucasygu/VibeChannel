@@ -754,7 +754,121 @@ date: ${isoTimestamp}`;
     }
   }
 
-  private async createGitHubIssue(filename: string): Promise<void> {
+  /**
+   * Get the numeric repository ID from GitHub API
+   */
+  private async getRepoId(owner: string, repo: string, token: string): Promise<number | null> {
+    try {
+      const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github+json',
+          'User-Agent': 'VibeChannel-VSCode-Extension',
+        },
+      });
+
+      if (!response.ok) {
+        console.log(`Failed to get repo info: ${response.status}`);
+        return null;
+      }
+
+      const data = await response.json() as { id: number };
+      return data.id;
+    } catch (error) {
+      console.error('Error getting repo ID:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Upload an image to GitHub's CDN (same mechanism as pasting images in issues)
+   * Returns the CDN URL or null if upload fails
+   */
+  private async uploadImageToGitHubCDN(
+    imagePath: string,
+    repoId: number,
+    token: string
+  ): Promise<string | null> {
+    try {
+      const worktreePath = this.gitService.getWorktreePath();
+      if (!worktreePath) return null;
+
+      const fullPath = path.join(worktreePath, imagePath);
+      if (!fs.existsSync(fullPath)) {
+        console.log(`Image file not found: ${fullPath}`);
+        return null;
+      }
+
+      // Read the image file
+      const imageBuffer = fs.readFileSync(fullPath);
+      const imageFilename = path.basename(imagePath);
+      const ext = path.extname(imageFilename).toLowerCase();
+
+      // Determine content type
+      const contentTypeMap: Record<string, string> = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+      };
+      const contentType = contentTypeMap[ext] || 'application/octet-stream';
+
+      // Step 1: Get upload policy from GitHub
+      const policyResponse = await fetch('https://github.com/upload/policies/assets', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'VibeChannel-VSCode-Extension',
+        },
+        body: JSON.stringify({
+          name: imageFilename,
+          size: imageBuffer.length,
+          content_type: contentType,
+          repository_id: repoId,
+        }),
+      });
+
+      if (!policyResponse.ok) {
+        console.log(`Failed to get upload policy: ${policyResponse.status}`);
+        return null;
+      }
+
+      const policy = await policyResponse.json() as {
+        upload_url: string;
+        form: Record<string, string>;
+        asset: { id: string };
+      };
+
+      // Step 2: Upload to S3 using the policy
+      const formData = new FormData();
+      for (const [key, value] of Object.entries(policy.form)) {
+        formData.append(key, value);
+      }
+      formData.append('file', new Blob([imageBuffer], { type: contentType }), imageFilename);
+
+      const uploadResponse = await fetch(policy.upload_url, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!uploadResponse.ok && uploadResponse.status !== 201 && uploadResponse.status !== 204) {
+        console.log(`Failed to upload to S3: ${uploadResponse.status}`);
+        return null;
+      }
+
+      // Return the CDN URL
+      return `https://github.com/user-attachments/assets/${policy.asset.id}`;
+    } catch (error) {
+      console.error('Error uploading image to GitHub CDN:', error);
+      return null;
+    }
+  }
+
+  private async createGitHubIssue(msgFilename: string): Promise<void> {
     const authService = GitHubAuthService.getInstance();
     const user = authService.getUser();
 
@@ -765,7 +879,7 @@ date: ${isoTimestamp}`;
 
     try {
       // Find the message
-      const message = this.conversation.messages.find(m => m.filename === filename);
+      const message = this.conversation.messages.find(m => m.filename === msgFilename);
       if (!message) {
         vscode.window.showErrorMessage('Message not found');
         return;
@@ -796,100 +910,132 @@ date: ${isoTimestamp}`;
         return; // User cancelled or error already shown
       }
 
-      // Create the issue title (first line or truncated content)
-      const firstLine = message.content.split('\n')[0];
-      const title = firstLine.length > 80 ? firstLine.substring(0, 77) + '...' : firstLine;
-
-      // Build the issue body with images
-      let issueBody = message.content;
-
-      // Append images as markdown if present
-      if (message.images && message.images.length > 0) {
-        issueBody += '\n\n---\n\n**Attached Images:**\n\n';
-        for (const imagePath of message.images) {
-          // imagePath is like ".assets/20250115T103045-a3f8c2.png"
-          const imageUrl = `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/vibechannel/${imagePath}`;
-          const filename = path.basename(imagePath);
-          issueBody += `![${filename}](${imageUrl})\n\n`;
-        }
-      }
-
-      // Append file references as links if present
-      if (message.files && message.files.length > 0) {
-        issueBody += '\n\n---\n\n**Referenced Files:**\n\n';
-        for (const filePath of message.files) {
-          // Link to file on default branch
-          const fileUrl = `https://github.com/${repoInfo.owner}/${repoInfo.repo}/blob/HEAD/${filePath}`;
-          issueBody += `- [${filePath}](${fileUrl})\n`;
-        }
-      }
-
-      // Append attachments as links if present
-      if (message.attachments && message.attachments.length > 0) {
-        issueBody += '\n\n---\n\n**Attachments:**\n\n';
-        for (const attachmentPath of message.attachments) {
-          // attachmentPath is like ".assets/20250115T103045-a3f8c2.pdf"
-          const attachmentUrl = `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/vibechannel/${attachmentPath}`;
-          const filename = path.basename(attachmentPath);
-          issueBody += `- [${filename}](${attachmentUrl})\n`;
-        }
-      }
-
-      // Create issue via GitHub API
-      const response = await fetch(`https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'VibeChannel-VSCode-Extension',
+      // Show progress indicator
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Creating GitHub Issue...',
+          cancellable: false,
         },
-        body: JSON.stringify({
-          title: title || 'VibeChannel Message',
-          body: issueBody,
-        }),
-      });
+        async (progress) => {
+          // Create the issue title (first line or truncated content)
+          const firstLine = message.content.split('\n')[0];
+          const title = firstLine.length > 80 ? firstLine.substring(0, 77) + '...' : firstLine;
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as { message?: string };
-        throw new Error(`GitHub API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
-      }
+          // Build the issue body
+          let issueBody = message.content;
 
-      const issueData = await response.json() as { html_url: string; number: number };
+          // Upload images to GitHub CDN if present
+          if (message.images && message.images.length > 0) {
+            progress.report({ message: 'Uploading images...' });
 
-      // Update the message file with the issue link
-      const channelPath = this.getCurrentChannelPath();
-      if (!channelPath) {
-        vscode.window.showErrorMessage('Channel path not available');
-        return;
-      }
+            // Get repository ID for upload API
+            const repoId = await this.getRepoId(repoInfo.owner, repoInfo.repo, token);
 
-      const filepath = path.join(channelPath, filename);
-      const existingContent = fs.readFileSync(filepath, 'utf-8');
-      const matter = require('gray-matter');
-      const parsed = matter(existingContent);
+            issueBody += '\n\n---\n\n**Attached Images:**\n\n';
 
-      // Add github_issue to frontmatter
-      parsed.data.github_issue = issueData.html_url;
+            for (const imagePath of message.images) {
+              const imageFilename = path.basename(imagePath);
 
-      // Rebuild the file
-      const newFileContent = matter.stringify(parsed.content, parsed.data);
-      fs.writeFileSync(filepath, newFileContent, 'utf-8');
+              // Try to upload to CDN
+              let imageUrl: string | null = null;
+              if (repoId) {
+                imageUrl = await this.uploadImageToGitHubCDN(imagePath, repoId, token);
+              }
 
-      // Commit the change
-      const commitSuccess = await this.gitService.commitChanges(`Link message to GitHub issue #${issueData.number}`);
+              if (imageUrl) {
+                // Use CDN URL (works for both public and private repos)
+                issueBody += `![${imageFilename}](${imageUrl})\n\n`;
+              } else {
+                // Fallback: link to the message file instead
+                const messageUrl = `https://github.com/${repoInfo.owner}/${repoInfo.repo}/blob/vibechannel/${this.currentChannel}/${message.filename}`;
+                issueBody += `*Image: ${imageFilename}* ([view in message](${messageUrl}))\n\n`;
+              }
+            }
+          }
 
-      if (!commitSuccess) {
-        vscode.window.showWarningMessage(
-          `Created GitHub issue #${issueData.number}, but failed to save the link locally. The issue link may not appear until you refresh.`
-        );
-      } else {
-        // Queue push only if commit succeeded
-        await this.syncService.queuePush();
-        vscode.window.showInformationMessage(`Created GitHub issue #${issueData.number}`);
-      }
+          // Append file references as links if present
+          if (message.files && message.files.length > 0) {
+            issueBody += '\n\n---\n\n**Referenced Files:**\n\n';
+            for (const filePath of message.files) {
+              // Link to file on default branch
+              const fileUrl = `https://github.com/${repoInfo.owner}/${repoInfo.repo}/blob/HEAD/${filePath}`;
+              issueBody += `- [${filePath}](${fileUrl})\n`;
+            }
+          }
 
-      // Refresh the view
-      this.refresh();
+          // Append attachments as links if present (non-image files)
+          if (message.attachments && message.attachments.length > 0) {
+            issueBody += '\n\n---\n\n**Attachments:**\n\n';
+            for (const attachmentPath of message.attachments) {
+              // For non-image attachments, link to the message file
+              const attachmentFilename = path.basename(attachmentPath);
+              const messageUrl = `https://github.com/${repoInfo.owner}/${repoInfo.repo}/blob/vibechannel/${this.currentChannel}/${message.filename}`;
+              issueBody += `- *${attachmentFilename}* ([view in message](${messageUrl}))\n`;
+            }
+          }
+
+          progress.report({ message: 'Creating issue...' });
+
+          // Create issue via GitHub API
+          const response = await fetch(`https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/issues`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'User-Agent': 'VibeChannel-VSCode-Extension',
+            },
+            body: JSON.stringify({
+              title: title || 'VibeChannel Message',
+              body: issueBody,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({})) as { message?: string };
+            throw new Error(`GitHub API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
+          }
+
+          const issueData = await response.json() as { html_url: string; number: number };
+
+          progress.report({ message: 'Saving issue link...' });
+
+          // Update the message file with the issue link
+          const channelPath = this.getCurrentChannelPath();
+          if (!channelPath) {
+            vscode.window.showErrorMessage('Channel path not available');
+            return;
+          }
+
+          const filepath = path.join(channelPath, msgFilename);
+          const existingContent = fs.readFileSync(filepath, 'utf-8');
+          const matter = require('gray-matter');
+          const parsed = matter(existingContent);
+
+          // Add github_issue to frontmatter
+          parsed.data.github_issue = issueData.html_url;
+
+          // Rebuild the file
+          const newFileContent = matter.stringify(parsed.content, parsed.data);
+          fs.writeFileSync(filepath, newFileContent, 'utf-8');
+
+          // Commit the change
+          const commitSuccess = await this.gitService.commitChanges(`Link message to GitHub issue #${issueData.number}`);
+
+          if (!commitSuccess) {
+            vscode.window.showWarningMessage(
+              `Created GitHub issue #${issueData.number}, but failed to save the link locally. The issue link may not appear until you refresh.`
+            );
+          } else {
+            // Queue push only if commit succeeded
+            await this.syncService.queuePush();
+            vscode.window.showInformationMessage(`Created GitHub issue #${issueData.number}`);
+          }
+
+          // Refresh the view
+          this.refresh();
+        }
+      );
     } catch (error) {
       vscode.window.showErrorMessage(`Failed to create GitHub issue: ${error instanceof Error ? error.message : error}`);
     }

@@ -26,6 +26,9 @@ struct Message: Identifiable, Codable, Equatable {
     var images: [String]?      // Pasted images (paths in .assets/)
     var attachments: [String]? // Pasted files (paths in .assets/)
 
+    // GitHub issue linked to this message
+    var githubIssue: String?   // URL to the GitHub issue created from this message
+
     init(
         id: String,
         filename: String,
@@ -40,7 +43,8 @@ struct Message: Identifiable, Codable, Equatable {
         isPending: Bool = false,
         files: [String]? = nil,
         images: [String]? = nil,
-        attachments: [String]? = nil
+        attachments: [String]? = nil,
+        githubIssue: String? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -56,5 +60,6 @@ struct Message: Identifiable, Codable, Equatable {
         self.files = files
         self.images = images
         self.attachments = attachments
+        self.githubIssue = githubIssue
     }
 }
