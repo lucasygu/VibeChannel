@@ -371,7 +371,8 @@ class MainViewModel: ObservableObject {
     /// - Returns: The URL of the created issue, or nil if failed
     func createGitHubIssue(from message: Message) async -> String? {
         guard let repo = selectedRepository,
-              let channel = selectedChannel else {
+              let channel = selectedChannel,
+              let api = api else {
             error = "No repository or channel selected"
             return nil
         }
@@ -383,13 +384,46 @@ class MainViewModel: ObservableObject {
         // Build issue body with images/files/attachments
         var issueBody = message.content
 
-        // Append images as markdown
+        // Upload images to GitHub CDN if present
         if let images = message.images, !images.isEmpty {
             issueBody += "\n\n---\n\n**Attached Images:**\n\n"
+
             for imagePath in images {
-                let imageUrl = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.name)/vibechannel/\(imagePath)"
                 let filename = (imagePath as NSString).lastPathComponent
-                issueBody += "![\(filename)](\(imageUrl))\n\n"
+
+                // Try to upload to CDN
+                var imageUrl: String? = nil
+                do {
+                    // Fetch image data from GitHub (base64 encoded)
+                    let fileItem = try await api.getFileContent(
+                        owner: repo.owner,
+                        repo: repo.name,
+                        path: imagePath,
+                        branch: GitHubAPIClient.vibeChannelBranch
+                    )
+
+                    if let base64Content = fileItem.content,
+                       let imageData = Data(base64Encoded: base64Content.replacingOccurrences(of: "\n", with: "")) {
+                        let contentType = GitHubAPIClient.contentType(for: filename)
+                        imageUrl = try await api.uploadImageToGitHubCDN(
+                            imageData: imageData,
+                            filename: filename,
+                            contentType: contentType,
+                            repoId: repo.id
+                        )
+                    }
+                } catch {
+                    print("🔴 [DEBUG] Failed to upload image \(filename) to CDN: \(error)")
+                }
+
+                if let cdnUrl = imageUrl {
+                    // Use CDN URL (works for both public and private repos)
+                    issueBody += "![\(filename)](\(cdnUrl))\n\n"
+                } else {
+                    // Fallback: link to the message file instead
+                    let messageUrl = "https://github.com/\(repo.owner)/\(repo.name)/blob/vibechannel/\(channel.id)/\(message.filename)"
+                    issueBody += "*Image: \(filename)* ([view in message](\(messageUrl)))\n\n"
+                }
             }
         }
 
@@ -402,13 +436,13 @@ class MainViewModel: ObservableObject {
             }
         }
 
-        // Append attachments as links
+        // Append attachments as links (non-image files - link to message)
         if let attachments = message.attachments, !attachments.isEmpty {
             issueBody += "\n\n---\n\n**Attachments:**\n\n"
             for attachmentPath in attachments {
-                let attachmentUrl = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.name)/vibechannel/\(attachmentPath)"
                 let filename = (attachmentPath as NSString).lastPathComponent
-                issueBody += "- [\(filename)](\(attachmentUrl))\n"
+                let messageUrl = "https://github.com/\(repo.owner)/\(repo.name)/blob/vibechannel/\(channel.id)/\(message.filename)"
+                issueBody += "- *\(filename)* ([view in message](\(messageUrl)))\n"
             }
         }
 

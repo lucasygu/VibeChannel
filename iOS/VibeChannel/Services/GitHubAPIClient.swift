@@ -370,6 +370,123 @@ class GitHubAPIClient {
         )
     }
 
+    // MARK: - Repository Info
+
+    /// Get repository numeric ID (needed for CDN upload)
+    func getRepoId(owner: String, repo: String) async throws -> Int {
+        let repository = try await getRepository(owner: owner, repo: repo)
+        return repository.id
+    }
+
+    // MARK: - GitHub CDN Upload
+
+    /// Upload an image to GitHub's CDN (same mechanism as pasting images in GitHub web UI)
+    /// This works for both public and private repos
+    /// - Parameters:
+    ///   - imageData: The image data to upload
+    ///   - filename: The filename for the image
+    ///   - contentType: The MIME type (e.g., "image/png")
+    ///   - repoId: The numeric repository ID
+    /// - Returns: The CDN URL for the uploaded image, or nil if upload failed
+    func uploadImageToGitHubCDN(
+        imageData: Data,
+        filename: String,
+        contentType: String,
+        repoId: Int
+    ) async throws -> String {
+        // Step 1: Get upload policy from GitHub
+        guard let policyURL = URL(string: "https://github.com/upload/policies/assets") else {
+            throw GitHubAPIError.invalidURL
+        }
+
+        var policyRequest = URLRequest(url: policyURL)
+        policyRequest.httpMethod = "POST"
+        policyRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        policyRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        policyRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        policyRequest.setValue("VibeChannel-iOS/1.0", forHTTPHeaderField: "User-Agent")
+
+        let policyBody: [String: Any] = [
+            "name": filename,
+            "size": imageData.count,
+            "content_type": contentType,
+            "repository_id": repoId
+        ]
+
+        policyRequest.httpBody = try JSONSerialization.data(withJSONObject: policyBody)
+
+        let (policyData, policyResponse) = try await session.data(for: policyRequest)
+
+        guard let httpResponse = policyResponse as? HTTPURLResponse,
+              httpResponse.statusCode == 200 || httpResponse.statusCode == 201 else {
+            let statusCode = (policyResponse as? HTTPURLResponse)?.statusCode ?? -1
+            print("🔴 [DEBUG] Failed to get upload policy: \(statusCode)")
+            throw GitHubAPIError.httpError(statusCode: statusCode, message: "Failed to get upload policy")
+        }
+
+        // Parse the policy response
+        guard let policyJSON = try JSONSerialization.jsonObject(with: policyData) as? [String: Any],
+              let uploadURL = policyJSON["upload_url"] as? String,
+              let form = policyJSON["form"] as? [String: String],
+              let asset = policyJSON["asset"] as? [String: Any],
+              let assetId = asset["id"] as? String else {
+            throw GitHubAPIError.decodingError(NSError(domain: "GitHubAPI", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid upload policy response"]))
+        }
+
+        // Step 2: Upload to S3 using multipart form data
+        guard let s3URL = URL(string: uploadURL) else {
+            throw GitHubAPIError.invalidURL
+        }
+
+        let boundary = UUID().uuidString
+        var uploadRequest = URLRequest(url: s3URL)
+        uploadRequest.httpMethod = "POST"
+        uploadRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+
+        // Add form fields from policy
+        for (key, value) in form {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+
+        // Add file data
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+        body.append(imageData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        uploadRequest.httpBody = body
+
+        let (_, uploadResponse) = try await session.data(for: uploadRequest)
+
+        guard let uploadHttpResponse = uploadResponse as? HTTPURLResponse,
+              uploadHttpResponse.statusCode == 200 || uploadHttpResponse.statusCode == 201 || uploadHttpResponse.statusCode == 204 else {
+            let statusCode = (uploadResponse as? HTTPURLResponse)?.statusCode ?? -1
+            print("🔴 [DEBUG] Failed to upload to S3: \(statusCode)")
+            throw GitHubAPIError.httpError(statusCode: statusCode, message: "Failed to upload image to S3")
+        }
+
+        // Return the CDN URL
+        return "https://github.com/user-attachments/assets/\(assetId)"
+    }
+
+    /// Get content type for image based on file extension
+    static func contentType(for filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "svg": return "image/svg+xml"
+        default: return "application/octet-stream"
+        }
+    }
+
     // MARK: - GitHub Issues
 
     /// Create a GitHub issue from a message
