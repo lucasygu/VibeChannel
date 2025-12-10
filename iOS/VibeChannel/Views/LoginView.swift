@@ -2,15 +2,13 @@
 //  LoginView.swift
 //  VibeChannel
 //
-//  Login screen with GitHub OAuth authentication.
+//  Login screen with Supabase + GitHub OAuth authentication.
 //
 
 import SwiftUI
 
 struct LoginView: View {
-    @EnvironmentObject var authService: GitHubAuthService
-    @State private var isSigningIn = false
-    @State private var errorMessage: String?
+    @EnvironmentObject var auth: AuthService
 
     var body: some View {
         VStack(spacing: 32) {
@@ -26,9 +24,10 @@ struct LoginView: View {
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
-                Text("Git-powered team conversations")
+                Text("Real-time team chat\npowered by Git")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
             Spacer()
@@ -49,13 +48,13 @@ struct LoginView: View {
                     .foregroundColor(.white)
                     .cornerRadius(12)
                 }
-                .disabled(isSigningIn)
+                .disabled(auth.isLoading)
 
-                if isSigningIn {
+                if auth.isLoading {
                     ProgressView("Signing in...")
                 }
 
-                if let error = errorMessage {
+                if let error = auth.error {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -68,11 +67,11 @@ struct LoginView: View {
 
             // Footer
             VStack(spacing: 8) {
-                Text("Your conversations, stored in Git")
+                Text("Instant messaging with Git sync")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Text("No backend required")
+                Text("Powered by Supabase")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -81,23 +80,13 @@ struct LoginView: View {
     }
 
     private func signIn() {
-        isSigningIn = true
-        errorMessage = nil
-
         Task {
-            do {
-                _ = try await authService.signIn()
-            } catch AuthError.cancelled {
-                // User cancelled, don't show error
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSigningIn = false
+            try? await auth.signIn()
         }
     }
 }
 
 #Preview {
     LoginView()
-        .environmentObject(GitHubAuthService.shared)
+        .environmentObject(SupabaseService.shared.auth)
 }

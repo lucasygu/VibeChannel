@@ -9,24 +9,16 @@ import SwiftUI
 
 struct ChannelSidebar: View {
     @ObservedObject var viewModel: MainViewModel
-    @EnvironmentObject var authService: GitHubAuthService
+    @EnvironmentObject var auth: AuthService
     let onSignOut: () -> Void
+    var onChannelSelected: (() -> Void)? = nil
 
     @State private var showingRepoSelector = false
     @State private var showingNewChannel = false
     @State private var newChannelName = ""
 
     var body: some View {
-        List(selection: Binding(
-            get: { viewModel.selectedChannel },
-            set: { channel in
-                if let channel = channel {
-                    Task {
-                        await viewModel.selectChannel(channel)
-                    }
-                }
-            }
-        )) {
+        List {
             // Repository Section
             Section {
                 Button(action: { showingRepoSelector = true }) {
@@ -34,9 +26,9 @@ struct ChannelSidebar: View {
                         Image(systemName: "folder.fill")
                             .foregroundStyle(.blue)
                         VStack(alignment: .leading) {
-                            Text(viewModel.selectedRepository?.name ?? "Select Repository")
+                            Text(viewModel.selectedRepo?.name ?? "Select Repository")
                                 .fontWeight(.semibold)
-                            if let repo = viewModel.selectedRepository {
+                            if let repo = viewModel.selectedRepo {
                                 Text(repo.owner)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -56,9 +48,17 @@ struct ChannelSidebar: View {
                 ForEach(viewModel.channels) { channel in
                     ChannelRow(
                         channel: channel,
-                        isSelected: channel == viewModel.selectedChannel
+                        isSelected: channel.id == viewModel.selectedChannel?.id,
+                        onlineCount: countOnlineInChannel(channel.id),
+                        onTap: {
+                            print("[ChannelSidebar] Tapped channel: \(channel.name)")
+                            Task {
+                                await viewModel.selectChannel(channel)
+                            }
+                            // Trigger navigation to detail view on iPhone
+                            onChannelSelected?()
+                        }
                     )
-                    .tag(channel)
                 }
             } header: {
                 HStack {
@@ -73,9 +73,9 @@ struct ChannelSidebar: View {
 
             // User Section
             Section {
-                if let user = authService.currentUser {
+                if let user = auth.currentUser {
                     HStack(spacing: 12) {
-                        AsyncImage(url: URL(string: user.avatarUrl)) { image in
+                        AsyncImage(url: URL(string: user.avatarUrl ?? "")) { image in
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -90,7 +90,7 @@ struct ChannelSidebar: View {
                             Text(user.displayName)
                                 .font(.subheadline)
                                 .fontWeight(.medium)
-                            Text("@\(user.login)")
+                            Text("@\(user.githubLogin)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -126,6 +126,13 @@ struct ChannelSidebar: View {
             Text("Enter a name for the new channel")
         }
     }
+
+    private func countOnlineInChannel(_ channelId: UUID) -> Int {
+        // Count users who are online in this channel (excluding self)
+        return viewModel.onlineUsers.filter { (userId, status) in
+            status != .offline && userId != viewModel.currentUserId
+        }.count
+    }
 }
 
 // MARK: - Channel Row
@@ -133,26 +140,46 @@ struct ChannelSidebar: View {
 struct ChannelRow: View {
     let channel: Channel
     let isSelected: Bool
+    let onlineCount: Int
+    let onTap: () -> Void
 
     var body: some View {
-        HStack {
-            Text("#")
-                .foregroundStyle(.secondary)
-            Text(channel.name)
+        Button(action: onTap) {
+            HStack {
+                Text("#")
+                    .foregroundStyle(.secondary)
+                Text(channel.name)
+                    .foregroundStyle(isSelected ? .primary : .primary)
 
-            Spacer()
+                Spacer()
 
-            if channel.unreadCount > 0 {
-                Text("\(channel.unreadCount)")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.red)
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
+                // Online indicator
+                if onlineCount > 0 {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                        Text("\(onlineCount)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if channel.unreadCount > 0 {
+                    Text("\(channel.unreadCount)")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.red)
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
+                }
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
     }
 }
 
@@ -163,11 +190,11 @@ struct RepositorySelectorSheet: View {
     @Binding var isPresented: Bool
     @State private var searchText = ""
 
-    var filteredRepos: [Repository] {
+    var filteredRepos: [Repo] {
         if searchText.isEmpty {
-            return viewModel.repositories
+            return viewModel.repos
         }
-        return viewModel.repositories.filter {
+        return viewModel.repos.filter {
             $0.name.localizedCaseInsensitiveContains(searchText) ||
             $0.fullName.localizedCaseInsensitiveContains(searchText)
         }
@@ -178,13 +205,13 @@ struct RepositorySelectorSheet: View {
             List(filteredRepos) { repo in
                 Button {
                     Task {
-                        await viewModel.selectRepository(repo)
+                        await viewModel.selectRepo(repo)
                     }
                     isPresented = false
                 } label: {
                     HStack {
-                        Image(systemName: repo.isPrivate ? "lock.fill" : "folder.fill")
-                            .foregroundStyle(repo.isPrivate ? .orange : .blue)
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(.blue)
 
                         VStack(alignment: .leading) {
                             Text(repo.name)
@@ -196,7 +223,7 @@ struct RepositorySelectorSheet: View {
 
                         Spacer()
 
-                        if repo == viewModel.selectedRepository {
+                        if repo == viewModel.selectedRepo {
                             Image(systemName: "checkmark")
                                 .foregroundStyle(.blue)
                         }
@@ -224,6 +251,6 @@ struct RepositorySelectorSheet: View {
             viewModel: MainViewModel(),
             onSignOut: {}
         )
-        .environmentObject(GitHubAuthService.shared)
+        .environmentObject(SupabaseService.shared.auth)
     }
 }

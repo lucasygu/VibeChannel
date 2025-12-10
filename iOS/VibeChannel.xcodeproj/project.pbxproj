@@ -6,6 +6,15 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7D995B8E2EE9F1CB0069C5C4 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 7D995B8D2EE9F1CB0069C5C4 /* Auth */; };
+		7D995B902EE9F1CB0069C5C4 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 7D995B8F2EE9F1CB0069C5C4 /* Functions */; };
+		7D995B922EE9F1CB0069C5C4 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 7D995B912EE9F1CB0069C5C4 /* PostgREST */; };
+		7D995B942EE9F1CB0069C5C4 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 7D995B932EE9F1CB0069C5C4 /* Realtime */; };
+		7D995B962EE9F1CB0069C5C4 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 7D995B952EE9F1CB0069C5C4 /* Storage */; };
+		7DCEAE4A2EE9F32C00DC7EB5 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 7DCEAE492EE9F32C00DC7EB5 /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		7D16C52E2EDA48D300515032 /* VibeChannel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VibeChannel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -36,6 +45,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7D995B922EE9F1CB0069C5C4 /* PostgREST in Frameworks */,
+				7D995B902EE9F1CB0069C5C4 /* Functions in Frameworks */,
+				7DCEAE4A2EE9F32C00DC7EB5 /* Supabase in Frameworks */,
+				7D995B8E2EE9F1CB0069C5C4 /* Auth in Frameworks */,
+				7D995B962EE9F1CB0069C5C4 /* Storage in Frameworks */,
+				7D995B942EE9F1CB0069C5C4 /* Realtime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				7D16C5302EDA48D300515032 /* VibeChannel */,
+				7DCEAE482EE9F32C00DC7EB5 /* Frameworks */,
 				7D16C52F2EDA48D300515032 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -56,6 +72,13 @@
 				7D16C52E2EDA48D300515032 /* VibeChannel.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		7DCEAE482EE9F32C00DC7EB5 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -78,6 +101,12 @@
 			);
 			name = VibeChannel;
 			packageProductDependencies = (
+				7D995B8D2EE9F1CB0069C5C4 /* Auth */,
+				7D995B8F2EE9F1CB0069C5C4 /* Functions */,
+				7D995B912EE9F1CB0069C5C4 /* PostgREST */,
+				7D995B932EE9F1CB0069C5C4 /* Realtime */,
+				7D995B952EE9F1CB0069C5C4 /* Storage */,
+				7DCEAE492EE9F32C00DC7EB5 /* Supabase */,
 			);
 			productName = VibeChannel;
 			productReference = 7D16C52E2EDA48D300515032 /* VibeChannel.app */;
@@ -107,6 +136,9 @@
 			);
 			mainGroup = 7D16C5252EDA48D300515032;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7D16C52F2EDA48D300515032 /* Products */;
 			projectDirPath = "";
@@ -366,6 +398,50 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7D995B8D2EE9F1CB0069C5C4 /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		7D995B8F2EE9F1CB0069C5C4 /* Functions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Functions;
+		};
+		7D995B912EE9F1CB0069C5C4 /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		7D995B932EE9F1CB0069C5C4 /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+		7D995B952EE9F1CB0069C5C4 /* Storage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Storage;
+		};
+		7DCEAE492EE9F32C00DC7EB5 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7D995B8C2EE9F1CB0069C5C4 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7D16C5262EDA48D300515032 /* Project object */;
 }

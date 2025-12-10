@@ -8,21 +8,26 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject var authService: GitHubAuthService
+    @EnvironmentObject var auth: AuthService
 
     var body: some View {
         Group {
-            if authService.isSignedIn {
+            if auth.currentUser != nil {
                 MainView()
             } else {
                 LoginView()
             }
         }
-        .animation(.easeInOut, value: authService.isSignedIn)
+        .animation(.easeInOut, value: auth.currentUser != nil)
+        .task {
+            await auth.restoreSession()
+        }
     }
 }
 
 #Preview {
     ContentView()
-        .environmentObject(GitHubAuthService.shared)
+        .environmentObject(SupabaseService.shared)
+        .environmentObject(SupabaseService.shared.auth)
+        .environmentObject(SupabaseService.shared.realtime)
 }

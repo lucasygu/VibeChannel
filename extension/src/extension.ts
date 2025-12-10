@@ -6,10 +6,14 @@ import { ChatPanel } from './chatPanel';
 import { GitHubAuthService, GitHubUser } from './githubAuth';
 import { GitService } from './gitService';
 import { SyncService } from './syncService';
+import { initializeSupabaseClient, isSupabaseConfigured } from './supabase/client';
+import { SupabaseAuthService } from './supabase/auth';
+import { RealtimeService } from './supabase/realtime';
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 let accountStatusBarItem: vscode.StatusBarItem | undefined;
 let authService: GitHubAuthService | undefined;
+let supabaseAuthService: SupabaseAuthService | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let hasUnread = false;
 
@@ -19,9 +23,38 @@ export function activate(context: vscode.ExtensionContext): void {
   // Store context for use in helper functions
   extensionContext = context;
 
-  // Initialize auth service
+  // Initialize auth service (existing VS Code GitHub auth)
   authService = GitHubAuthService.getInstance();
   context.subscriptions.push(authService);
+
+  // Initialize Supabase if configured
+  initializeSupabaseClient(context);
+  if (isSupabaseConfigured()) {
+    supabaseAuthService = SupabaseAuthService.getInstance();
+    supabaseAuthService.initialize();
+    context.subscriptions.push(supabaseAuthService);
+    context.subscriptions.push(RealtimeService.getInstance());
+    console.log('VibeChannel: Supabase backend enabled');
+  }
+
+  // Register URI handler for OAuth callbacks
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri: async (uri: vscode.Uri) => {
+        console.log('VibeChannel: Received URI callback:', uri.toString());
+
+        if (uri.path === '/auth/callback') {
+          // Handle Supabase OAuth callback
+          if (supabaseAuthService) {
+            const success = await supabaseAuthService.handleAuthCallback(uri);
+            if (success) {
+              ChatPanel.refresh();
+            }
+          }
+        }
+      }
+    })
+  );
 
   // Register commands
   const openCurrentCommand = vscode.commands.registerCommand(
@@ -439,6 +472,11 @@ export function deactivate(): void {
   }
   try {
     GitService.getInstance().dispose();
+  } catch {
+    // Service may not have been initialized
+  }
+  try {
+    RealtimeService.getInstance().dispose();
   } catch {
     // Service may not have been initialized
   }

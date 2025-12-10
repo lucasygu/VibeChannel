@@ -16,6 +16,11 @@ import { GitService } from './gitService';
 import { SyncService } from './syncService';
 import { NotificationService } from './notificationService';
 import { markMessagesAsRead } from './extension';
+import { isSupabaseConfigured } from './supabase/client';
+import { SupabaseAuthService } from './supabase/auth';
+import { MessageService } from './services/messageService';
+import { RepoService } from './services/repoService';
+import { Message as SupabaseMessage } from './supabase/types';
 
 function createEmptyConversation(folderPath: string): Conversation {
   return {
@@ -48,6 +53,11 @@ export class ChatPanel {
   private connectionMode: 'connected' | 'local-only' | 'offline' = 'connected';
   private remoteDetected = false;
   private remoteCheckInterval: NodeJS.Timeout | null = null;
+
+  // Supabase integration
+  private useSupabase = false;
+  private supabaseRepoId: string | null = null;
+  private supabaseChannelId: string | null = null;
 
   public static async createOrShow(
     repoPath: string,
@@ -293,9 +303,15 @@ export class ChatPanel {
           await this.refreshWithNotification();
         } else if (event.type === 'readOnlyMode') {
           this.enterReadOnlyMode();
+        } else if (event.type === 'realtimeMessage') {
+          // Handle real-time message from Supabase
+          await this.handleRealtimeMessage(event.data as SupabaseMessage & { _deleted?: boolean; _updated?: boolean });
         }
       })
     );
+
+    // Initialize Supabase integration if enabled
+    this.initializeSupabase();
 
     // Handle panel disposal
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -325,6 +341,155 @@ export class ChatPanel {
     const worktreePath = this.gitService.getWorktreePath();
     return worktreePath ? path.join(worktreePath, this.currentChannel) : '';
   }
+
+  // =========================================================================
+  // Supabase Integration
+  // =========================================================================
+
+  /**
+   * Initialize Supabase integration if enabled
+   */
+  private async initializeSupabase(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('vibechannel');
+    this.useSupabase = config.get<boolean>('useSupabase') ?? false;
+
+    if (!this.useSupabase || !isSupabaseConfigured()) {
+      console.log('ChatPanel: Supabase not enabled or not configured');
+      return;
+    }
+
+    const supabaseAuth = SupabaseAuthService.getInstance();
+    if (!supabaseAuth.isAuthenticated()) {
+      console.log('ChatPanel: Supabase not authenticated');
+      return;
+    }
+
+    try {
+      // Try to find the repo in Supabase by matching the git remote URL
+      const repoService = RepoService.getInstance();
+      const remoteUrl = this.gitService.getRemoteUrl();
+
+      if (remoteUrl) {
+        // Extract owner/repo from git URL
+        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+        if (match) {
+          const fullName = `${match[1]}/${match[2]}`;
+          const repo = await repoService.getRepoByFullName(fullName);
+
+          if (repo) {
+            this.supabaseRepoId = repo.id;
+            console.log(`ChatPanel: Found Supabase repo: ${fullName} (${repo.id})`);
+
+            // Get or create channel
+            const channel = await repoService.getOrCreateChannel(repo.id, this.currentChannel);
+            if (channel) {
+              this.supabaseChannelId = channel.id;
+              console.log(`ChatPanel: Using Supabase channel: ${channel.name} (${channel.id})`);
+
+              // Subscribe to realtime updates
+              this.syncService.subscribeToChannel(channel.id);
+            }
+          } else {
+            console.log(`ChatPanel: Repo ${fullName} not found in Supabase. Using git-only mode.`);
+            this.useSupabase = false;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('ChatPanel: Failed to initialize Supabase:', error);
+      this.useSupabase = false;
+    }
+  }
+
+  /**
+   * Handle real-time message from Supabase
+   */
+  private async handleRealtimeMessage(message: SupabaseMessage & { _deleted?: boolean; _updated?: boolean }): Promise<void> {
+    if (message._deleted) {
+      // Remove message from UI
+      this.panel.webview.postMessage({
+        type: 'messageDeleted',
+        payload: { id: message.id }
+      });
+      return;
+    }
+
+    const filename = message.github_path.split('/').pop() || message.id;
+    const channelPath = this.getCurrentChannelPath();
+
+    // Convert Supabase message to local Message format for display
+    const localMessage: Message = {
+      filename,
+      filepath: channelPath ? path.join(channelPath, filename) : filename,
+      from: message.sender,
+      date: new Date(message.created_at),
+      content: message.content,
+      rawContent: message.content,
+      replyTo: message.reply_to_path || undefined,
+      tags: message.tags || undefined,
+    };
+
+    if (message._updated) {
+      // Update existing message in UI
+      this.panel.webview.postMessage({
+        type: 'messageUpdated',
+        payload: localMessage
+      });
+    } else {
+      // Add new message to UI
+      this.panel.webview.postMessage({
+        type: 'newMessage',
+        payload: localMessage
+      });
+
+      // Check for notifications - use VS Code's built-in notification
+      const authService = GitHubAuthService.getInstance();
+      const currentUser = authService.getUser();
+      if (currentUser && message.sender !== currentUser.login.toLowerCase()) {
+        // Show notification for messages from others when panel not visible
+        if (!this.panel.visible) {
+          vscode.window.showInformationMessage(
+            `New message from ${message.sender} in #${this.currentChannel}`
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Send a message via Supabase
+   * Returns true if successful, false to fall back to git
+   */
+  private async sendMessageViaSupabase(
+    content: string,
+    replyToId?: string
+  ): Promise<boolean> {
+    if (!this.useSupabase || !this.supabaseChannelId) {
+      return false;
+    }
+
+    try {
+      const messageService = MessageService.getInstance();
+      const message = await messageService.sendMessage(
+        this.supabaseChannelId,
+        content,
+        replyToId
+      );
+
+      if (message) {
+        console.log('ChatPanel: Message sent via Supabase:', message.id);
+        return true;
+      }
+    } catch (error) {
+      console.error('ChatPanel: Failed to send via Supabase:', error);
+    }
+
+    return false;
+  }
+
+  // =========================================================================
+  // End Supabase Integration
+  // =========================================================================
 
   /**
    * Get list of files in the repo (respects .gitignore)
@@ -580,7 +745,31 @@ export class ChatPanel {
       this.startWatcher();
     }
 
+    // Update Supabase channel subscription
+    this.updateSupabaseChannel(channelName);
+
     this.update();
+  }
+
+  /**
+   * Update Supabase channel subscription when switching channels
+   */
+  private async updateSupabaseChannel(channelName: string): Promise<void> {
+    if (!this.useSupabase || !this.supabaseRepoId) {
+      return;
+    }
+
+    try {
+      const repoService = RepoService.getInstance();
+      const channel = await repoService.getOrCreateChannel(this.supabaseRepoId, channelName);
+      if (channel) {
+        this.supabaseChannelId = channel.id;
+        this.syncService.subscribeToChannel(channel.id);
+        console.log(`ChatPanel: Switched to Supabase channel: ${channelName} (${channel.id})`);
+      }
+    } catch (error) {
+      console.error('ChatPanel: Failed to switch Supabase channel:', error);
+    }
   }
 
   private async promptCreateChannel(): Promise<void> {
@@ -623,6 +812,18 @@ export class ChatPanel {
     if (!user) {
       vscode.window.showErrorMessage('You must be signed in to send messages');
       return;
+    }
+
+    // For simple text messages (no attachments), try Supabase first
+    const hasAttachments = (files && files.length > 0) || (images && images.length > 0) || (attachments && attachments.length > 0);
+    if (!hasAttachments && this.useSupabase) {
+      const sentViaSupabase = await this.sendMessageViaSupabase(content, replyTo);
+      if (sentViaSupabase) {
+        // Message sent via Supabase, Edge Function will sync to GitHub
+        return;
+      }
+      // Fall through to git-based sending if Supabase fails
+      console.log('ChatPanel: Supabase send failed, falling back to git');
     }
 
     try {

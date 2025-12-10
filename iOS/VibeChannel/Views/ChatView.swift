@@ -16,7 +16,7 @@ struct ChatView: View {
 
     @State private var messageText = ""
     @FocusState private var isInputFocused: Bool
-    @State private var highlightedMessageId: String?
+    @State private var highlightedMessageId: UUID?
     @State private var editingMessage: Message?
     @State private var showDeleteConfirmation = false
     @State private var messageToDelete: Message?
@@ -40,20 +40,11 @@ struct ChatView: View {
                                     onDelete: canDelete(message) ? { confirmDelete(message) } : nil,
                                     onCopy: { copyToClipboard(message.content) },
                                     onTapParent: {
-                                        if let parentId = message.replyTo?.replacingOccurrences(of: ".md", with: "") {
+                                        if let parentId = message.replyToId {
                                             scrollToMessage(id: parentId, proxy: proxy)
                                         }
                                     },
-                                    onCreateIssue: canCreateIssue(message) ? {
-                                        Task {
-                                            if let issueUrl = await viewModel.createGitHubIssue(from: message) {
-                                                print("Created issue: \(issueUrl)")
-                                            }
-                                        }
-                                    } : nil,
-                                    isHighlighted: highlightedMessageId == message.id,
-                                    owner: viewModel.owner,
-                                    repo: viewModel.repo
+                                    isHighlighted: highlightedMessageId == message.id
                                 )
                                 .id(message.id)
                             }
@@ -75,6 +66,19 @@ struct ChatView: View {
                 }
             }
 
+            // Typing indicator
+            if !viewModel.onlineUsers.filter({ $0.value == .typing && $0.key != viewModel.currentUserId }).isEmpty {
+                HStack {
+                    TypingIndicator()
+                    Text("Someone is typing...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+            }
+
             Divider()
 
             // Input
@@ -84,7 +88,12 @@ struct ChatView: View {
                 isFocused: $isInputFocused,
                 replyingTo: viewModel.replyingTo,
                 onSend: sendMessage,
-                onCancelReply: { viewModel.setReplyingTo(nil) }
+                onCancelReply: { viewModel.setReplyingTo(nil) },
+                onTypingChanged: { isTyping in
+                    Task {
+                        await viewModel.setTyping(isTyping)
+                    }
+                }
             )
         }
         .navigationTitle("#\(channel.name)")
@@ -94,6 +103,19 @@ struct ChatView: View {
                 HStack(spacing: 16) {
                     if viewModel.isLoading {
                         ProgressView()
+                    }
+
+                    // Online users count
+                    let onlineCount = viewModel.onlineUsers.filter { $0.value != .offline }.count
+                    if onlineCount > 0 {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(.green)
+                                .frame(width: 8, height: 8)
+                            Text("\(onlineCount) online")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Text("\(viewModel.messages.count) messages")
@@ -132,33 +154,23 @@ struct ChatView: View {
     // MARK: - Helper Functions
 
     private func findParentMessage(for message: Message) -> Message? {
-        guard let replyTo = message.replyTo else { return nil }
-        let parentId = replyTo.replacingOccurrences(of: ".md", with: "")
-        return viewModel.messages.first { $0.id == parentId }
+        guard let replyToId = message.replyToId else { return nil }
+        return viewModel.messages.first { $0.id == replyToId }
     }
 
     private func canEdit(_ message: Message) -> Bool {
         // Can only edit your own messages
-        // TODO: Compare with current user when we have auth context
-        return message.sha != nil && !message.isPending
+        guard let currentUser = viewModel.currentUserLogin else { return false }
+        return message.sender.lowercased() == currentUser.lowercased()
     }
 
     private func canDelete(_ message: Message) -> Bool {
         // Can only delete your own messages
-        // TODO: Compare with current user when we have auth context
-        return message.sha != nil && !message.isPending
-    }
-
-    private func canCreateIssue(_ message: Message) -> Bool {
-        // Can only create issues from your own messages that don't already have an issue
         guard let currentUser = viewModel.currentUserLogin else { return false }
-        return message.from.lowercased() == currentUser.lowercased() &&
-               message.githubIssue == nil &&
-               message.sha != nil &&
-               !message.isPending
+        return message.sender.lowercased() == currentUser.lowercased()
     }
 
-    private func scrollToMessage(id: String, proxy: ScrollViewProxy) {
+    private func scrollToMessage(id: UUID, proxy: ScrollViewProxy) {
         withAnimation {
             proxy.scrollTo(id, anchor: .center)
         }
@@ -216,6 +228,28 @@ struct ChatView: View {
     }
 }
 
+// MARK: - Typing Indicator
+
+struct TypingIndicator: View {
+    @State private var animationOffset = 0
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3) { index in
+                Circle()
+                    .fill(.secondary)
+                    .frame(width: 6, height: 6)
+                    .offset(y: animationOffset == index ? -3 : 0)
+            }
+        }
+        .onAppear {
+            withAnimation(Animation.easeInOut(duration: 0.5).repeatForever()) {
+                animationOffset = (animationOffset + 1) % 3
+            }
+        }
+    }
+}
+
 // MARK: - Edit Message Sheet
 
 struct EditMessageSheet: View {
@@ -261,7 +295,7 @@ struct EditMessageSheet: View {
     NavigationStack {
         ChatView(
             viewModel: MainViewModel(),
-            channel: Channel(id: "general")
+            channel: Channel(repoId: UUID(), name: "general")
         )
     }
 }

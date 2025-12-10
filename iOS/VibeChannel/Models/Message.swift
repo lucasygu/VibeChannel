@@ -2,64 +2,81 @@
 //  Message.swift
 //  VibeChannel
 //
-//  Data model for a VibeChannel message.
-//  Matches the format from the VSCode extension.
+//  Message model mapped to Supabase messages table
 //
 
 import Foundation
 
 struct Message: Identifiable, Codable, Equatable {
-    let id: String           // filename without .md
-    let filename: String     // Full filename: 20250115T103045-alice-abc123.md
-    let from: String         // Sender username
-    let date: Date           // ISO 8601 timestamp
-    let replyTo: String?     // Optional: filename of parent message
-    let tags: [String]?      // Optional: array of tags
-    let edited: Date?        // Optional: last edit timestamp
-    let content: String      // Markdown content (body after frontmatter)
-    let rawContent: String   // Full file content including frontmatter
-    var sha: String?         // GitHub file SHA (for updates/deletes)
-    var isPending: Bool = false  // True if not yet synced to GitHub
+    let id: UUID
+    let channelId: UUID
+    let sender: String
+    let senderUserId: UUID?
+    let content: String
+    let replyToId: UUID?
+    let replyToPath: String?
+    let tags: [String]?
+    let githubPath: String
+    let githubSha: String?
+    let githubSynced: Bool?
+    let syncedAt: Date?
+    let createdAt: Date
+    let updatedAt: Date
 
-    // Attachments (matching VS Code extension)
-    var files: [String]?       // @ referenced files (paths in repo)
-    var images: [String]?      // Pasted images (paths in .assets/)
-    var attachments: [String]? // Pasted files (paths in .assets/)
+    enum CodingKeys: String, CodingKey {
+        case id
+        case channelId = "channel_id"
+        case sender
+        case senderUserId = "sender_user_id"
+        case content
+        case replyToId = "reply_to_id"
+        case replyToPath = "reply_to_path"
+        case tags
+        case githubPath = "github_path"
+        case githubSha = "github_sha"
+        case githubSynced = "github_synced"
+        case syncedAt = "synced_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
 
-    // GitHub issue linked to this message
-    var githubIssue: String?   // URL to the GitHub issue created from this message
+    // Convenience computed properties for compatibility with existing views
+    var from: String { sender }
+    var date: Date { createdAt }
+    var filename: String {
+        githubPath.components(separatedBy: "/").last ?? githubPath
+    }
 
+    // For creating new messages locally
     init(
-        id: String,
-        filename: String,
-        from: String,
-        date: Date,
-        replyTo: String? = nil,
-        tags: [String]? = nil,
-        edited: Date? = nil,
+        id: UUID = UUID(),
+        channelId: UUID,
+        sender: String,
+        senderUserId: UUID? = nil,
         content: String,
-        rawContent: String,
-        sha: String? = nil,
-        isPending: Bool = false,
-        files: [String]? = nil,
-        images: [String]? = nil,
-        attachments: [String]? = nil,
-        githubIssue: String? = nil
+        replyToId: UUID? = nil,
+        replyToPath: String? = nil,
+        tags: [String]? = nil,
+        githubPath: String,
+        githubSha: String? = nil,
+        githubSynced: Bool? = false,
+        syncedAt: Date? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.id = id
-        self.filename = filename
-        self.from = from
-        self.date = date
-        self.replyTo = replyTo
-        self.tags = tags
-        self.edited = edited
+        self.channelId = channelId
+        self.sender = sender
+        self.senderUserId = senderUserId
         self.content = content
-        self.rawContent = rawContent
-        self.sha = sha
-        self.isPending = isPending
-        self.files = files
-        self.images = images
-        self.attachments = attachments
-        self.githubIssue = githubIssue
+        self.replyToId = replyToId
+        self.replyToPath = replyToPath
+        self.tags = tags
+        self.githubPath = githubPath
+        self.githubSha = githubSha
+        self.githubSynced = githubSynced
+        self.syncedAt = syncedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

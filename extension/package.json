@@ -2,7 +2,7 @@
   "name": "vibechannel",
   "displayName": "VibeChannel",
   "description": "Team chat for the vibe coding era. Git-native, AI-friendly conversations in your repo.",
-  "version": "0.6.31",
+  "version": "0.6.32",
   "publisher": "lucasygu",
   "license": "MIT",
   "repository": {
@@ -114,6 +114,21 @@
           "type": "boolean",
           "default": true,
           "description": "Play sound with notifications (when VS Code is not focused)"
+        },
+        "vibechannel.supabaseUrl": {
+          "type": "string",
+          "default": "https://mhdkictdllndbsmmnxfp.supabase.co",
+          "description": "Supabase project URL"
+        },
+        "vibechannel.supabaseAnonKey": {
+          "type": "string",
+          "default": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oZGtpY3RkbGxuZGJzbW1ueGZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUzNzk4NDMsImV4cCI6MjA4MDk1NTg0M30.0T62h45Ocoj67KI7ka-H9-noXY-Kw8MPZpI67uxLLlQ",
+          "description": "Supabase anonymous key for authentication"
+        },
+        "vibechannel.useSupabase": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Supabase backend for real-time messaging"
         }
       }
     }
@@ -135,6 +150,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.38.0",
     "gray-matter": "^4.0.3",
     "marked": "^11.0.0",
     "node-notifier": "^10.0.1"

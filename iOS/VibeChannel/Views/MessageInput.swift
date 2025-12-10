@@ -2,7 +2,7 @@
 //  MessageInput.swift
 //  VibeChannel
 //
-//  Message input field with send button.
+//  Message input field with send button and typing indicator support.
 //
 
 import SwiftUI
@@ -14,6 +14,10 @@ struct MessageInput: View {
     var replyingTo: Message?
     let onSend: () -> Void
     var onCancelReply: (() -> Void)?
+    var onTypingChanged: ((Bool) -> Void)?
+
+    @State private var isTyping = false
+    @State private var typingDebounce: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,14 +25,14 @@ struct MessageInput: View {
             if let replyMessage = replyingTo {
                 HStack {
                     Rectangle()
-                        .fill(replyColor(replyMessage.from))
+                        .fill(replyColor(replyMessage.sender))
                         .frame(width: 3)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Replying to \(replyMessage.from)")
+                        Text("Replying to \(replyMessage.sender)")
                             .font(.caption)
                             .fontWeight(.semibold)
-                            .foregroundStyle(replyColor(replyMessage.from))
+                            .foregroundStyle(replyColor(replyMessage.sender))
 
                         Text(replyMessage.content.prefix(60) + (replyMessage.content.count > 60 ? "..." : ""))
                             .font(.caption)
@@ -59,13 +63,20 @@ struct MessageInput: View {
                     .background(Color(.systemGray6))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .focused(isFocused)
+                    .onChange(of: text) { _, newValue in
+                        handleTypingChange(newValue)
+                    }
                     .onSubmit {
                         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             onSend()
+                            stopTyping()
                         }
                     }
 
-                Button(action: onSend) {
+                Button(action: {
+                    onSend()
+                    stopTyping()
+                }) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title)
                         .foregroundStyle(canSend ? .blue : .gray)
@@ -80,6 +91,35 @@ struct MessageInput: View {
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func handleTypingChange(_ newValue: String) {
+        // Cancel previous debounce
+        typingDebounce?.cancel()
+
+        if !newValue.isEmpty && !isTyping {
+            // Started typing
+            isTyping = true
+            onTypingChanged?(true)
+        }
+
+        // Debounce to stop typing after 2 seconds of inactivity
+        typingDebounce = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled {
+                await MainActor.run {
+                    stopTyping()
+                }
+            }
+        }
+    }
+
+    private func stopTyping() {
+        if isTyping {
+            isTyping = false
+            onTypingChanged?(false)
+        }
+        typingDebounce?.cancel()
     }
 
     private func replyColor(_ sender: String) -> Color {
@@ -118,12 +158,10 @@ struct MessageInput: View {
         @State private var text = ""
         @FocusState private var isFocused: Bool
         @State private var replyingTo: Message? = Message(
-            id: "test",
-            filename: "20250115T103045-alice-abc123.md",
-            from: "alice",
-            date: Date(),
+            channelId: UUID(),
+            sender: "alice",
             content: "This is the message being replied to with some longer content that might be truncated.",
-            rawContent: ""
+            githubPath: "general/20250115T103045-alice-abc123.md"
         )
 
         var body: some View {

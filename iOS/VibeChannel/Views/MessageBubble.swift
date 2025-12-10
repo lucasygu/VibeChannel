@@ -15,17 +15,12 @@ struct MessageBubble: View {
     var onDelete: (() -> Void)?
     var onCopy: (() -> Void)?
     var onTapParent: (() -> Void)?
-    var onCreateIssue: (() -> Void)?  // Create GitHub issue from this message
     var isHighlighted: Bool = false
-
-    // Repository info for loading images from raw.githubusercontent.com
-    var owner: String = ""
-    var repo: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // Avatar
-            AsyncImage(url: URL(string: "https://github.com/\(message.from).png?size=72")) { image in
+            AsyncImage(url: URL(string: "https://github.com/\(message.sender).png?size=72")) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -33,7 +28,7 @@ struct MessageBubble: View {
                 Circle()
                     .fill(senderColor.opacity(0.3))
                     .overlay {
-                        Text(String(message.from.prefix(1)).uppercased())
+                        Text(String(message.sender.prefix(1)).uppercased())
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundStyle(senderColor)
@@ -48,14 +43,14 @@ struct MessageBubble: View {
                     Button(action: { onTapParent?() }) {
                         HStack(spacing: 6) {
                             Rectangle()
-                                .fill(parentSenderColor(parent.from))
+                                .fill(parentSenderColor(parent.sender))
                                 .frame(width: 2)
 
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(parent.from)
+                                Text(parent.sender)
                                     .font(.caption2)
                                     .fontWeight(.semibold)
-                                    .foregroundStyle(parentSenderColor(parent.from))
+                                    .foregroundStyle(parentSenderColor(parent.sender))
 
                                 Text(parent.content.prefix(50) + (parent.content.count > 50 ? "..." : ""))
                                     .font(.caption)
@@ -73,7 +68,7 @@ struct MessageBubble: View {
 
                 // Header
                 HStack(spacing: 8) {
-                    Text(message.from)
+                    Text(message.sender)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundStyle(senderColor)
@@ -82,13 +77,19 @@ struct MessageBubble: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    if message.isPending {
+                    // Sync status
+                    if message.githubSynced == false {
                         Image(systemName: "clock")
                             .font(.caption)
                             .foregroundStyle(.orange)
+                    } else if message.githubSynced == true {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green.opacity(0.6))
                     }
 
-                    if message.edited != nil {
+                    // Edited indicator
+                    if message.updatedAt > message.createdAt {
                         Text("(edited)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -98,21 +99,6 @@ struct MessageBubble: View {
                 // Content (with markdown rendering)
                 RichMessageContent(content: message.content)
                     .font(.body)
-
-                // Images (from .assets/)
-                if let images = message.images, !images.isEmpty {
-                    MessageImagesView(images: images, owner: owner, repo: repo)
-                }
-
-                // File attachments
-                if let attachments = message.attachments, !attachments.isEmpty {
-                    MessageAttachmentsView(attachments: attachments)
-                }
-
-                // Referenced files
-                if let files = message.files, !files.isEmpty {
-                    MessageFilesView(files: files)
-                }
 
                 // Tags
                 if let tags = message.tags, !tags.isEmpty {
@@ -125,24 +111,6 @@ struct MessageBubble: View {
                                 .background(Color.secondary.opacity(0.2))
                                 .clipShape(Capsule())
                         }
-                    }
-                    .padding(.top, 4)
-                }
-
-                // GitHub Issue Link
-                if let issueUrl = message.githubIssue, let url = URL(string: issueUrl) {
-                    Link(destination: url) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "link.circle.fill")
-                                .font(.caption)
-                            Text("View Issue")
-                                .font(.caption)
-                        }
-                        .foregroundStyle(.purple)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.purple.opacity(0.1))
-                        .clipShape(Capsule())
                     }
                     .padding(.top, 4)
                 }
@@ -162,20 +130,6 @@ struct MessageBubble: View {
 
             Button(action: { onCopy?() }) {
                 Label("Copy", systemImage: "doc.on.doc")
-            }
-
-            // Only show "Create Issue" if no issue is linked yet and callback is provided
-            if message.githubIssue == nil, let createIssue = onCreateIssue {
-                Button(action: { createIssue() }) {
-                    Label("Create GitHub Issue", systemImage: "exclamationmark.bubble")
-                }
-            }
-
-            // Open existing issue in browser
-            if let issueUrl = message.githubIssue, let url = URL(string: issueUrl) {
-                Link(destination: url) {
-                    Label("View Issue", systemImage: "link")
-                }
             }
 
             if onEdit != nil {
@@ -206,7 +160,7 @@ struct MessageBubble: View {
     private var senderColor: Color {
         let colors: [Color] = [.blue, .green, .orange, .pink, .purple, .teal]
         var hash = 0
-        for char in message.from.unicodeScalars {
+        for char in message.sender.unicodeScalars {
             hash = ((hash << 5) &- hash) &+ Int(char.value)
         }
         return colors[abs(hash) % colors.count]
@@ -241,48 +195,28 @@ struct MessageBubble: View {
 }
 
 #Preview {
-    let parentMessage = Message(
-        id: "test-1",
-        filename: "20250115T103045-alice-abc123.md",
-        from: "alice",
-        date: Date().addingTimeInterval(-3700),
-        content: "Hello, this is the original message!",
-        rawContent: ""
-    )
-
-    return VStack {
+    VStack {
         MessageBubble(message: Message(
-            id: "test-1",
-            filename: "20250115T103045-alice-abc123.md",
-            from: "alice",
-            date: Date(),
+            channelId: UUID(),
+            sender: "alice",
             content: "Hello, this is a test message!",
-            rawContent: ""
+            githubPath: "general/20250115T103045-alice-abc123.md"
         ))
 
         MessageBubble(
             message: Message(
-                id: "test-2",
-                filename: "20250115T103145-bob-def456.md",
-                from: "bob",
-                date: Date().addingTimeInterval(-3600),
-                replyTo: "20250115T103045-alice-abc123.md",
-                tags: ["important", "review"],
+                channelId: UUID(),
+                sender: "bob",
                 content: "This is a reply with some **markdown** content.",
-                rawContent: ""
+                replyToId: UUID(),
+                tags: ["important", "review"],
+                githubPath: "general/20250115T103145-bob-def456.md"
             ),
-            parentMessage: parentMessage
-        )
-
-        MessageBubble(
-            message: Message(
-                id: "test-3",
-                filename: "20250115T103245-charlie-ghi789.md",
-                from: "charlie",
-                date: Date().addingTimeInterval(-1800),
-                edited: Date(),
-                content: "This message was edited.",
-                rawContent: ""
+            parentMessage: Message(
+                channelId: UUID(),
+                sender: "alice",
+                content: "Hello, this is the original message!",
+                githubPath: "general/20250115T103045-alice-abc123.md"
             )
         )
     }
