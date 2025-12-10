@@ -28,7 +28,7 @@ final class PresenceService: Sendable {
             params["p_channel_id"] = channelId.uuidString
         }
 
-        try await client.database
+        try await client
             .rpc("update_presence", params: params)
             .execute()
     }
@@ -36,7 +36,7 @@ final class PresenceService: Sendable {
     // MARK: - Get Online Users in Channel
 
     func getOnlineUsers(channelId: UUID) async throws -> [Presence] {
-        let presences: [Presence] = try await client.database
+        let presences: [Presence] = try await client
             .from("presence")
             .select()
             .eq("channel_id", value: channelId)
@@ -50,7 +50,7 @@ final class PresenceService: Sendable {
     // MARK: - Get Online Users in Repo
 
     func getOnlineUsersInRepo(repoId: UUID) async throws -> [Presence] {
-        let presences: [Presence] = try await client.database
+        let presences: [Presence] = try await client
             .from("presence")
             .select()
             .eq("repo_id", value: repoId)

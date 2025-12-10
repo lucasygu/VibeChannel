@@ -18,7 +18,7 @@ final class ChannelService {
     // MARK: - Fetch Channels for Repo
 
     func fetchChannels(repoId: UUID) async throws -> [Channel] {
-        let channels: [Channel] = try await client.database
+        let channels: [Channel] = try await client
             .from("channels")
             .select()
             .eq("repo_id", value: repoId)
@@ -32,7 +32,7 @@ final class ChannelService {
     // MARK: - Get Single Channel
 
     func getChannel(channelId: UUID) async throws -> Channel? {
-        let channels: [Channel] = try await client.database
+        let channels: [Channel] = try await client
             .from("channels")
             .select()
             .eq("id", value: channelId)
@@ -57,7 +57,7 @@ final class ChannelService {
             description: description
         )
 
-        let channel: Channel = try await client.database
+        let channel: Channel = try await client
             .from("channels")
             .insert(newChannel)
             .select()
@@ -72,7 +72,7 @@ final class ChannelService {
 
     func getOrCreateChannel(repoId: UUID, name: String) async throws -> Channel {
         // Try to find existing
-        let existing: [Channel] = try await client.database
+        let existing: [Channel] = try await client
             .from("channels")
             .select()
             .eq("repo_id", value: repoId)
@@ -109,7 +109,7 @@ final class ChannelService {
             return [:]
         }
 
-        let counts: [UnreadResult] = try await client.database
+        let counts: [UnreadResult] = try await client
             .from("unread_counts")
             .select("channel_id, unread_count")
             .eq("user_id", value: userId)
@@ -123,7 +123,7 @@ final class ChannelService {
     // MARK: - Mark Channel as Read
 
     func markChannelRead(channelId: UUID) async throws {
-        try await client.database
+        try await client
             .rpc("mark_channel_read", params: ["p_channel_id": channelId])
             .execute()
     }

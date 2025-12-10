@@ -20,7 +20,7 @@ final class RepoService {
     func fetchUserRepos(userId: UUID) async throws -> [Repo] {
         // Query repos through user_repos junction table
         // Using a subquery approach since supabase-swift may have limitations with inner joins
-        let userRepos: [UserRepo] = try await client.database
+        let userRepos: [UserRepo] = try await client
             .from("user_repos")
             .select()
             .eq("user_id", value: userId)
@@ -33,7 +33,7 @@ final class RepoService {
             return []
         }
 
-        let repos: [Repo] = try await client.database
+        let repos: [Repo] = try await client
             .from("repos")
             .select()
             .in("id", values: repoIds)
@@ -47,7 +47,7 @@ final class RepoService {
     // MARK: - Get Single Repo
 
     func getRepo(repoId: UUID) async throws -> Repo? {
-        let repos: [Repo] = try await client.database
+        let repos: [Repo] = try await client
             .from("repos")
             .select()
             .eq("id", value: repoId)
@@ -60,7 +60,7 @@ final class RepoService {
     // MARK: - Get Repo by Full Name
 
     func getRepoByFullName(fullName: String) async throws -> Repo? {
-        let repos: [Repo] = try await client.database
+        let repos: [Repo] = try await client
             .from("repos")
             .select()
             .eq("full_name", value: fullName)
@@ -85,7 +85,7 @@ final class RepoService {
             role: role.rawValue
         )
 
-        try await client.database
+        try await client
             .from("user_repos")
             .upsert(userRepo)
             .execute()
@@ -94,7 +94,7 @@ final class RepoService {
     // MARK: - Leave Repo (remove user access)
 
     func leaveRepo(userId: UUID, repoId: UUID) async throws {
-        try await client.database
+        try await client
             .from("user_repos")
             .delete()
             .eq("user_id", value: userId)
@@ -105,7 +105,7 @@ final class RepoService {
     // MARK: - Check User Access
 
     func hasAccess(userId: UUID, repoId: UUID) async throws -> Bool {
-        let userRepos: [UserRepo] = try await client.database
+        let userRepos: [UserRepo] = try await client
             .from("user_repos")
             .select()
             .eq("user_id", value: userId)

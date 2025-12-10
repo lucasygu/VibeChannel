@@ -140,7 +140,7 @@ final class AuthService: NSObject, ObservableObject {
         print("Loading user: \(authUser.id)")
 
         do {
-            let users: [User] = try await client.database
+            let users: [User] = try await client
                 .from("users")
                 .select()
                 .eq("id", value: authUser.id)

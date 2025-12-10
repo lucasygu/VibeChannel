@@ -19,7 +19,7 @@ final class MessageService: Sendable {
 
     func fetchMessages(channelId: UUID, limit: Int = 100, before: Date? = nil) async throws -> [Message] {
         if let before = before {
-            let messages: [Message] = try await client.database
+            let messages: [Message] = try await client
                 .from("messages")
                 .select()
                 .eq("channel_id", value: channelId)
@@ -30,7 +30,7 @@ final class MessageService: Sendable {
                 .value
             return messages
         } else {
-            let messages: [Message] = try await client.database
+            let messages: [Message] = try await client
                 .from("messages")
                 .select()
                 .eq("channel_id", value: channelId)
@@ -45,7 +45,7 @@ final class MessageService: Sendable {
     // MARK: - Get Single Message
 
     func getMessage(messageId: UUID) async throws -> Message? {
-        let messages: [Message] = try await client.database
+        let messages: [Message] = try await client
             .from("messages")
             .select()
             .eq("id", value: messageId)
@@ -83,7 +83,7 @@ final class MessageService: Sendable {
             created_at: ISO8601DateFormatter().string(from: now)
         )
 
-        let message: Message = try await client.database
+        let message: Message = try await client
             .from("messages")
             .insert(newMessage)
             .select()
@@ -102,7 +102,7 @@ final class MessageService: Sendable {
             updated_at: ISO8601DateFormatter().string(from: Date())
         )
 
-        let message: Message = try await client.database
+        let message: Message = try await client
             .from("messages")
             .update(updates)
             .eq("id", value: messageId)
@@ -117,7 +117,7 @@ final class MessageService: Sendable {
     // MARK: - Delete Message
 
     func deleteMessage(messageId: UUID) async throws {
-        try await client.database
+        try await client
             .from("messages")
             .delete()
             .eq("id", value: messageId)
@@ -142,7 +142,7 @@ final class MessageService: Sendable {
     }
 
     private func fetchChannelName(channelId: UUID) async throws -> String {
-        let channel: ChannelNameResult = try await client.database
+        let channel: ChannelNameResult = try await client
             .from("channels")
             .select("name")
             .eq("id", value: channelId)
