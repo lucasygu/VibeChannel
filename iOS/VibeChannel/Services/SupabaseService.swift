@@ -29,7 +29,9 @@ final class SupabaseService: ObservableObject {
             supabaseKey: Config.supabaseAnonKey,
             options: SupabaseClientOptions(
                 auth: SupabaseClientOptions.AuthOptions(
-                    redirectToURL: URL(string: Config.redirectUrl)
+                    redirectToURL: URL(string: Config.redirectUrl),
+                    // Opt-in to new session behavior to silence deprecation warning
+                    emitLocalSessionAsInitialSession: true
                 )
             )
         )

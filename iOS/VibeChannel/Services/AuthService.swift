@@ -41,7 +41,7 @@ final class AuthService: NSObject, ObservableObject {
 
         do {
             // Get the OAuth URL from Supabase
-            let url = try await client.auth.getOAuthSignInURL(
+            let url = try client.auth.getOAuthSignInURL(
                 provider: .github,
                 redirectTo: URL(string: Config.redirectUrl)
             )
@@ -224,12 +224,21 @@ final class AuthService: NSObject, ObservableObject {
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // Get the key window for presenting the auth session
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = windowScene.windows.first else {
-            return ASPresentationAnchor()
+        // Get the first connected window scene
+        let windowScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first
+
+        // Return existing window from scene, or create a new one with the scene
+        if let scene = windowScene {
+            return scene.windows.first ?? UIWindow(windowScene: scene)
         }
-        return window
+
+        // Fallback: create window with any available scene (should always exist)
+        let fallbackScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first!
+        return UIWindow(windowScene: fallbackScene)
     }
 }
 

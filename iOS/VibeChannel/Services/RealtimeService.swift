@@ -37,33 +37,38 @@ final class RealtimeService: ObservableObject {
 
         let channel = client.realtimeV2.channel("messages:\(channelId.uuidString)")
 
-        // Listen for INSERTs
+        // Listen for INSERTs using new filter syntax
         let insertions = channel.postgresChange(
             InsertAction.self,
             schema: "public",
             table: "messages",
-            filter: "channel_id=eq.\(channelId.uuidString)"
+            filter: .eq("channel_id", value: channelId.uuidString)
         )
 
-        // Listen for UPDATEs
+        // Listen for UPDATEs using new filter syntax
         let updates = channel.postgresChange(
             UpdateAction.self,
             schema: "public",
             table: "messages",
-            filter: "channel_id=eq.\(channelId.uuidString)"
+            filter: .eq("channel_id", value: channelId.uuidString)
         )
 
-        // Listen for DELETEs
+        // Listen for DELETEs using new filter syntax
         let deletions = channel.postgresChange(
             DeleteAction.self,
             schema: "public",
             table: "messages",
-            filter: "channel_id=eq.\(channelId.uuidString)"
+            filter: .eq("channel_id", value: channelId.uuidString)
         )
 
-        await channel.subscribe()
-        messageChannel = channel
-        isConnected = true
+        do {
+            try await channel.subscribeWithError()
+            messageChannel = channel
+            isConnected = true
+        } catch {
+            print("[RealtimeService] Failed to subscribe: \(error)")
+            return
+        }
 
         // Handle insertions
         Task {
