@@ -51,11 +51,9 @@ struct ChannelSidebar: View {
                         isSelected: channel.id == viewModel.selectedChannel?.id,
                         onlineCount: countOnlineInChannel(channel.id),
                         onTap: {
-                            print("[ChannelSidebar] Tapped channel: \(channel.name)")
                             Task {
                                 await viewModel.selectChannel(channel)
                             }
-                            // Trigger navigation to detail view on iPhone
                             onChannelSelected?()
                         }
                     )

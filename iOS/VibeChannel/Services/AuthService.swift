@@ -18,6 +18,7 @@ final class AuthService: NSObject, ObservableObject {
     @Published var currentUser: User?
     @Published var session: Session?
     @Published var isLoading = false
+    @Published var isCheckingSession = true  // True until we check for existing session
     @Published var error: String?
 
     init(client: SupabaseClient) {
@@ -184,11 +185,15 @@ final class AuthService: NSObject, ObservableObject {
     // MARK: - Restore Session
 
     func restoreSession() async {
+        isCheckingSession = true
+        defer { isCheckingSession = false }
+
         do {
             session = try await client.auth.session
             await loadCurrentUser()
+            print("[AuthService] Session restored for user: \(currentUser?.githubLogin ?? "unknown")")
         } catch {
-            print("No existing session: \(error)")
+            print("[AuthService] No existing session: \(error)")
             session = nil
             currentUser = nil
         }

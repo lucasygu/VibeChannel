@@ -14,34 +14,52 @@ struct MainView: View {
     @EnvironmentObject var auth: AuthService
     @EnvironmentObject var realtime: RealtimeService
     @StateObject private var viewModel = MainViewModel()
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            ChannelSidebar(
-                viewModel: viewModel,
-                onSignOut: {
-                    Task {
-                        try? await auth.signOut()
+        Group {
+            if horizontalSizeClass == .compact {
+                // iPhone: Use NavigationStack with explicit path
+                NavigationStack(path: $navigationPath) {
+                    ChannelSidebarCompact(
+                        viewModel: viewModel,
+                        navigationPath: $navigationPath,
+                        onSignOut: {
+                            Task {
+                                try? await auth.signOut()
+                            }
+                        }
+                    )
+                    .navigationDestination(for: Channel.self) { channel in
+                        ChatView(viewModel: viewModel, channel: channel)
                     }
-                },
-                onChannelSelected: {
-                    // On iPhone, show the detail view when a channel is selected
-                    columnVisibility = .detailOnly
                 }
-            )
-        } detail: {
-            if let channel = viewModel.selectedChannel {
-                ChatView(viewModel: viewModel, channel: channel)
             } else {
-                ContentUnavailableView(
-                    "Select a Channel",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Choose a channel from the sidebar to start chatting")
-                )
+                // iPad: Use NavigationSplitView
+                NavigationSplitView {
+                    ChannelSidebar(
+                        viewModel: viewModel,
+                        onSignOut: {
+                            Task {
+                                try? await auth.signOut()
+                            }
+                        },
+                        onChannelSelected: nil
+                    )
+                } detail: {
+                    if let channel = viewModel.selectedChannel {
+                        ChatView(viewModel: viewModel, channel: channel)
+                    } else {
+                        ContentUnavailableView(
+                            "Select a Channel",
+                            systemImage: "bubble.left.and.bubble.right",
+                            description: Text("Choose a channel from the sidebar to start chatting")
+                        )
+                    }
+                }
             }
         }
-        .navigationSplitViewStyle(.balanced)
         .task {
             await viewModel.initialize(
                 supabase: supabase,
@@ -50,6 +68,144 @@ struct MainView: View {
         }
         .refreshable {
             await viewModel.refresh()
+        }
+    }
+}
+
+// MARK: - Compact Sidebar (iPhone)
+// Uses NavigationLink for proper push navigation
+
+struct ChannelSidebarCompact: View {
+    @ObservedObject var viewModel: MainViewModel
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject var auth: AuthService
+    let onSignOut: () -> Void
+
+    @State private var showingRepoSelector = false
+    @State private var showingNewChannel = false
+    @State private var newChannelName = ""
+
+    var body: some View {
+        List {
+            // Repository Section
+            Section {
+                Button(action: { showingRepoSelector = true }) {
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading) {
+                            Text(viewModel.selectedRepo?.name ?? "Select Repository")
+                                .fontWeight(.semibold)
+                            if let repo = viewModel.selectedRepo {
+                                Text(repo.owner)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Channels Section
+            Section {
+                ForEach(viewModel.channels) { channel in
+                    Button {
+                        navigationPath.append(channel)
+                        Task {
+                            await viewModel.selectChannel(channel)
+                        }
+                    } label: {
+                        HStack {
+                            Text("#")
+                                .foregroundStyle(.secondary)
+                            Text(channel.name)
+
+                            Spacer()
+
+                            if channel.unreadCount > 0 {
+                                Text("\(channel.unreadCount)")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.red)
+                                    .foregroundColor(.white)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                HStack {
+                    Text("Channels")
+                    Spacer()
+                    Button(action: { showingNewChannel = true }) {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                    }
+                }
+            }
+
+            // User Section
+            Section {
+                if let user = auth.currentUser {
+                    HStack(spacing: 12) {
+                        AsyncImage(url: URL(string: user.avatarUrl ?? "")) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Circle()
+                                .fill(.gray.opacity(0.3))
+                        }
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                        VStack(alignment: .leading) {
+                            Text(user.displayName)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Text("@\(user.githubLogin)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Button(role: .destructive, action: onSignOut) {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationTitle("VibeChannel")
+        .sheet(isPresented: $showingRepoSelector) {
+            RepositorySelectorSheet(viewModel: viewModel, isPresented: $showingRepoSelector)
+        }
+        .alert("New Channel", isPresented: $showingNewChannel) {
+            TextField("Channel name", text: $newChannelName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Cancel", role: .cancel) {
+                newChannelName = ""
+            }
+            Button("Create") {
+                let name = newChannelName.lowercased().replacingOccurrences(of: " ", with: "-")
+                Task {
+                    await viewModel.createChannel(name: name)
+                }
+                newChannelName = ""
+            }
+            .disabled(newChannelName.isEmpty)
+        } message: {
+            Text("Enter a name for the new channel")
         }
     }
 }
@@ -201,19 +357,12 @@ class MainViewModel: ObservableObject {
     // MARK: - Select Channel
 
     func selectChannel(_ channel: Channel) async {
-        print("[MainViewModel] selectChannel called for: \(channel.name)")
-        print("[MainViewModel] supabase is nil: \(supabase == nil)")
-
-        guard let supabase = supabase else {
-            print("[MainViewModel] ERROR: supabase is nil, returning early")
-            return
-        }
+        guard let supabase = supabase else { return }
 
         // Unsubscribe from previous channel
         await supabase.realtime.unsubscribeFromChannel()
         await supabase.realtime.unsubscribeFromPresence()
 
-        print("[MainViewModel] Setting selectedChannel to: \(channel.name)")
         selectedChannel = channel
         replyingTo = nil
 
